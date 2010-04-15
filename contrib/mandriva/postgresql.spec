@@ -512,7 +512,7 @@ exit 1
 %files -f main.lst 
 %defattr(-,root,root)
 %doc doc/KNOWN_BUGS doc/MISSING_FEATURES doc/README* 
-%doc COPYRIGHT README HISTORY doc/bug.template
+%doc COPYRIGHT README doc/bug.template
 %{_bindir}/clusterdb
 %{_bindir}/createdb
 %{_bindir}/createlang
