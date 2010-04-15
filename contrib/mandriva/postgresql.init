@@ -1,0 +1,176 @@
+#! /bin/sh
+# postgresql	This is the init script for starting up the PostgreSQL
+#		server
+#
+# chkconfig: 2345 85 15
+# description: Starts and stops the PostgreSQL backend daemon that handles \
+#	       all database requests.
+# processname: postmaster
+# pidfile: /var/run/postmaster.pid
+### BEGIN INIT INFO
+# Provides: postgresql
+# Required-Start: $local_fs $syslog
+# Required-Stop:
+# Default-Start: 3 4 5
+# Default-Stop: 0 1 2 6
+# Short-Description: PostgreSql server database
+# Description: Starts and stops the PostgreSQL backend daemon that handles
+#              all database requests.
+### END INIT INFO
+
+# Source function library.
+INITD=/etc/rc.d/init.d
+. $INITD/functions
+
+# Get function listing for cross-distribution logic.
+TYPESET=`typeset -F`
+# Get config.
+. /etc/sysconfig/network
+
+# Find the name of the script
+NAME=postgresql
+
+# Set defaults for port and database directory
+LOGFILE=/var/log/postgres/postgresql
+
+[ -f /etc/sysconfig/postgresql ] && . /etc/sysconfig/postgresql
+[ -f ~postgres/.profile ] && . ~postgres/.profile
+
+# Override defaults from /etc/sysconfig/pgsql if file is present
+export PGDATA
+
+# Check that networking is up.
+# Pretty much need it for postmaster.
+[ "${NETWORKING}" = "no" ] && exit 0
+
+[ -f /usr/bin/postmaster ] || exit 0
+
+
+start(){
+	PSQL_START=$"Starting ${NAME} service: "
+
+	# Check for the PGDATA structure
+	if [ ! -f $PGDATA/PG_VERSION ]
+    then
+	        gprintf "Initializing database: "
+                if [ ! -d $PGDATA ]
+		then
+			mkdir -p $PGDATA
+			chown postgres.postgres $PGDATA
+			chmod go-rwx $PGDATA
+		fi
+		# Initialize the database
+		su -l postgres -s /bin/sh -c "/usr/bin/initdb --pgdata=$PGDATA > /var/log/postgres/postgresql 2>&1" < /dev/null
+		[ -f $PGDATA/PG_VERSION ] && echo_success
+		[ ! -f $PGDATA/PG_VERSION ] && echo_failure
+		echo
+ 	fi
+
+	# Check for postmaster already running...
+  # note that pg_ctl only looks at the data structures in PGDATA
+  # you really do need the pidof()
+	pid=`pidof -s /usr/bin/postmaster`
+	if [ $pid ] && /usr/bin/pg_ctl -l ${LOGFILE} status -D $PGDATA > /dev/null 2>&1
+	then
+		gprintf "Postmaster already running.\n"
+	else
+		#all systems go -- remove any stale lock files
+		rm -f /tmp/.s.PGSQL.* > /dev/null
+		gprintf "%s" "$PSQL_START"
+		su -l postgres -s /bin/sh -c "/usr/bin/pg_ctl -l ${LOGFILE} -D $PGDATA -p /usr/bin/postmaster start  > /dev/null 2>&1" < /dev/null
+ 		sleep 1
+ 		pid=`pidof -s /usr/bin/postmaster`
+ 		if [ $pid ]
+		then
+			if echo "$TYPESET"|grep "declare -f success" >/dev/null
+			then
+				success "%s" "$PSQL_START"
+			else
+				gprintf "  [ OK ]\n"
+			fi
+			touch /var/lock/subsys/${NAME}
+			echo $pid > /var/run/postmaster.pid
+			echo
+		else
+			if echo "$TYPESET"|grep "declare -f failure" >/dev/null
+			then
+				failure "%s" "$PSQL_START"
+			else
+				gprintf " [ FAILED ]\n"
+			fi
+			echo
+		fi
+	fi
+}
+
+stop(){
+	PSQL_STOP=$"Stopping ${NAME} service: "
+    gprintf "%s" "$PSQL_STOP"
+	su -l postgres -s /bin/sh -c "/usr/bin/pg_ctl -l ${LOGFILE} stop -D $PGDATA -s -m fast" > /dev/null 2>&1
+	ret=$? 
+	if [ $ret -eq 0 ]
+	then
+		if echo "$TYPESET"|grep "declare -f success" >/dev/null
+		then
+			success "%s" "$PSQL_STOP"
+		else
+			gprintf "  [ OK ]\n"
+		fi
+
+	else
+		if echo "$TYPESET"|grep "declare -f failure" >/dev/null
+		then
+			failure "%s" "$PSQL_STOP"
+		else
+			gprintf "  [ FAILED ]\n"
+		fi
+
+	fi
+	echo
+	rm -f /var/run/postmaster.pid
+	rm -f /var/lock/subsys/${NAME}
+}
+
+restart(){
+    stop
+    start
+}
+
+condrestart(){
+    [ -e /var/lock/subsys/${NAME} ] && restart
+}
+
+reload(){
+    su -l postgres -s /bin/sh -c "/usr/bin/pg_ctl -l ${LOGFILE} reload -D $PGDATA -s" > /dev/null 2>&1
+}
+
+# This script is slightly unusual in that the name of the daemon (postmaster)
+# is not the same as the name of the subsystem (postgresql)
+
+# See how we were called.
+case "$1" in
+  start)
+	start
+	;;
+  stop)
+	stop
+	;;
+  status)
+	status postmaster
+	;;
+  restart)
+	restart
+	;;
+  condrestart)
+	condrestart
+	;;
+  reload|force-reload)
+	reload
+	;;
+  *)
+	gprintf "Usage: %s {start|stop|status|restart|condrestart|reload|force-reload}\n" "$0"
+	exit 1
+esac
+
+exit 0
+
