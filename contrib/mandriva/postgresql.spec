@@ -1,3 +1,7 @@
+%define git_repo postgresql
+%define git_head HEAD
+# define version %git_get_ver
+
 %if %_lib == lib64
 %define _requires_exceptions devel(libtcl8.4(64bit))
 %else
@@ -34,16 +38,11 @@ Summary: 	PostgreSQL client programs and libraries
 Name:		%{bname}%{current_major_version}
 Version: 	%{current_major_version}%{?!beta:.%{current_minor_version}}
 Release: 	%release
+# Release: 	%mkrel %git_get_rel
 License:	BSD
 Group:		Databases
 URL:		http://www.postgresql.org/ 
-Source0:	ftp://ftp.postgresql.org/pub/source/v%{version}/postgresql-%{version}%{?beta}.tar.bz2
-%if 0%{?!beta:1}
-Source5:	ftp://ftp.postgresql.org/pub/source/v%{version}/postgresql-%{version}%{?beta}.tar.bz2.md5
-%endif
-Source10:   postgres.profile
-Source11:	postgresql.init
-Source13:	postgresql.mdv.releasenote
+Source0:	%git_bs_source %{name}-%{version}.tar.gz
 Requires:	perl
 Provides:	postgresql-clients = %{version}-%{release}
 Conflicts:	postgresql-clients < %{version}-%{release}
@@ -55,7 +54,7 @@ BuildRequires:  libxslt-devel
 BuildRequires:	edit-devel
 # Need to build doc
 BuildRequires:  docbook-dtd42-sgml openjade docbook-utils xsltproc
-Buildroot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot
+# Buildroot:	%{_tmppath}/%{name}-%{version}-%{release}-buildroot
 Provides: %{bname}-virtual = %{current_major_version}
 Conflicts: %{bname}-virtual < %{current_major_version}
 Conflicts: %{bname}-virtual > %{current_major_version}
@@ -294,8 +293,8 @@ procedural languages for the backend. PL/PgSQL is part of the core
 server package.
 
 %prep
-
-%setup -q -n %{bname}-%{version}%{?beta}
+%git_get_source
+%setup -q
 
 %build
 
@@ -382,7 +381,7 @@ cat > %buildroot%logrotatedir/%{bname} <<EOF
 }
 EOF
 
-install -D -m755 %{SOURCE11} $RPM_BUILD_ROOT%{_initrddir}/postgresql
+install -D -m755 contrib/mandriva/postgresql.init $RPM_BUILD_ROOT%{_initrddir}/postgresql
 
 mv $RPM_BUILD_ROOT%{_docdir}/%{bname}/html $RPM_BUILD_ROOT%{_docdir}/%{name}-docs-%{version}
 
@@ -423,7 +422,7 @@ cat > %buildroot/%_sys_macros_dir/%{name}.macros <<EOF
 %%pgmodules_req Requires: %{?arch_tagged:%arch_tagged %{bname}-server-ABI}%{?!arch_tagged:%{bname}-server-ABI} = %{current_major_version}
 EOF
 
-cat %{SOURCE13} > postgresql.mdv.releasenote
+cat contrib/mandriva/postgresql.mdv.releasenote > postgresql.mdv.releasenote
 cat > README.urpmi <<EOF
 You just installed or update %{bname} server.
 You can found important informations about mandriva %{bname} rpms and database
@@ -435,7 +434,7 @@ Please, read it.
 EOF
 
 # postgres' .profile and .bashrc
-install -D -m 700 %SOURCE10 $RPM_BUILD_ROOT/var/lib/pgsql/.profile
+install -D -m 700 contrib/mandriva/postgres.profile $RPM_BUILD_ROOT/var/lib/pgsql/.profile
 (
 cd $RPM_BUILD_ROOT/var/lib/pgsql/
 ln -s .profile .bashrc
@@ -643,3 +642,4 @@ exit 1
 %defattr(-,root,root) 
 %{_libdir}/postgresql/plpgsql.so
 
+%changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
