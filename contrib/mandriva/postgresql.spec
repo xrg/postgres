@@ -334,6 +334,8 @@ pushd src/test
 make all
 popd
 
+%make -C doc all
+
 %check
 make check
 
@@ -342,6 +344,7 @@ rm -rf $RPM_BUILD_ROOT
 
 make DESTDIR=$RPM_BUILD_ROOT install 
 make -C contrib DESTDIR=$RPM_BUILD_ROOT install
+make -C doc DESTDIR=$RPM_BUILD_ROOT install
 
 # install odbcinst.ini
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/pgsql
