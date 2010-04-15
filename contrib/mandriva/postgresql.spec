@@ -20,14 +20,14 @@
 %define major_ecpg 6
 
 %define bname postgresql
-%define current_major_version 8.5
+%define current_major_version 9.0
 %define current_minor_version 0
 
 # Define if it's a beta
-%define beta alpha2
+%define beta alpha5
 
 # define the mdv release
-%define rel 3
+%define rel 0
 
 %define release %mkrel %{?beta:0.%{beta}.}%{rel}
 
