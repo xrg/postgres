@@ -1,0 +1,42 @@
+This file contains important information about PostgreSQL Mandriva's rpms.
+
+This document is dedicated to postgres administrators and or system
+administrators.
+I assume you know:
+  - what is postgres
+  - what is database backup
+  - what are and how to use pg_dump, pgdump_all and psql
+  - how to backup and restore your database by hand.
+
+If you have any doubt, please refer to postgresql documentation.
+
+Olivier Thauvin <nanardon@mandriva.org>
+
+* Database migration
+
+If you plan to later change your postgresql major version (eg 8.2 => 8.3),
+you'll have to dump and restore your databases yourself.
+
+- how to configure tablespace:
+    Tablespace as know by postgresql 8 and higher are supported, location on
+    previous will not be moved. Anyway, postgresql 8 is unable to automatically
+    translate pg location to tablespace.
+
+    As all data directory, a directory with name suffixed by backup id is
+    created, files are moved from old to the new directory:
+    if your location is /foo/data, /foo/data.ID is created, files from
+    /foo/data are moved into /foo/data.ID, leaving /foo/data empty and ready
+    to store new database.
+
+    A good practice is to respect the pgsql/data structure to allow data to be
+    easilly moved, eg if you want a dedicated partition for your data, mount
+    point should be pgsql/ and your data into subdirectory.
+
+* Version 8.1 and later
+
+- pg_autovacuum
+    pg_autovacuum is a daemon which monitor database and run vacuum and analyze
+    when needed. Introduced as a postgresql contrib in version 8.0, mandriva rpm was
+    providing an initscript to start the daemon at boot.
+    This feature is now included into the backend itself, it is disabled by
+    default. Set autovacuum parameter to true into postgresql.conf
