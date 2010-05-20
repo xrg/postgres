@@ -27,7 +27,7 @@
 %define beta beta1
 
 # define the mdv release
-%define rel 0
+%define rel 1
 
 %define release %mkrel %{?beta:0.%{beta}.}%{rel}
 
@@ -569,6 +569,7 @@ exit 1
 %{_bindir}/postgres
 %{_bindir}/postmaster
 %{_bindir}/pg_standby
+%{_bindir}/pg_upgrade
 %{_bindir}/oid2name
 %{_bindir}/pgbench
 %{_bindir}/vacuumlo
@@ -618,9 +619,9 @@ exit 1
 %{_bindir}/pg_config
 %{_mandir}/man1/pg_config.1*
 #From %files -n %{libnamedevel}
-%{_libdir}/libpq.so
+#{_libdir}/libpq.so
 #From %files -n %{libecpgdevel}
-%{_libdir}/libecpg.so
+#{_libdir}/libecpg.so
 
 %files pl 
 %defattr(-,root,root) 
