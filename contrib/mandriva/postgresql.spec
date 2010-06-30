@@ -1,6 +1,5 @@
 %define git_repo postgresql
 %define git_head HEAD
-# define version %git_get_ver
 
 %if %_lib == lib64
 %define _requires_exceptions devel(libtcl8.4(64bit))
@@ -20,25 +19,15 @@
 %define major_ecpg 6
 
 %define bname postgresql
-%define current_major_version 9.0
-%define current_minor_version 0
-
-# Define if it's a beta
-%define beta beta1
-
-# define the mdv release
-%define rel 1
-
-%define release %mkrel %{?beta:0.%{beta}.}%{rel}
+%define current_major_version %(echo %{git_get_ver} | sed 's/^\\([0-9]\\+\\.[0-9]\\+\\)\\..*$/\\1/' )
 
 %define libname %mklibname pq%{current_major_version} _%{major}
 %define libecpg %mklibname ecpg%{current_major_version} _%{major_ecpg}
 
 Summary: 	PostgreSQL client programs and libraries
 Name:		%{bname}%{current_major_version}
-Version: 	%{current_major_version}%{?!beta:.%{current_minor_version}}
-Release: 	%release
-# Release: 	%mkrel %git_get_rel
+Version: 	%git_get_ver
+Release: 	%mkrel %git_get_rel2
 License:	BSD
 Group:		Databases
 URL:		http://www.postgresql.org/ 
@@ -176,8 +165,8 @@ Provides:   libpq-devel = %{version}-%{release}
 Provides:   %{_lib}pq-devel = %{version}-%{release}
 Conflicts:  %{_lib}pq-devel < %{version}
 Conflicts:  %{_lib}pq-devel > %{version}
-Requires:	%{libecpg} = %{version}-%{release}
-Provides:	libecpg-devel = %{version}-%{release} 
+Requires:   %{libecpg} = %{version}-%{release}
+Provides:   libecpg-devel = %{version}-%{release}
 Provides:   %{_lib}ecpg-devel = %{version}-%{release}
 Conflicts:  %{_lib}ecpg-devel < %{version}-%{release}
 Conflicts:  %{_lib}ecpg-devel > %{version}-%{release}
