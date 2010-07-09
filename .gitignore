@@ -22,6 +22,7 @@ lcov.info
 win32ver.rc
 *.exe
 lib*dll.def
+*~
 
 # Local excludes in root directory
 /GNUmakefile
