@@ -559,6 +559,7 @@ exit 1
 %{_bindir}/postmaster
 %{_bindir}/pg_standby
 %{_bindir}/pg_upgrade
+%{_bindir}/pg_archivecleanup
 %{_bindir}/oid2name
 %{_bindir}/pgbench
 %{_bindir}/vacuumlo
