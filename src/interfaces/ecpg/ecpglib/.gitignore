@@ -1,0 +1,7 @@
+/exports.list
+/libecpg.a
+/libecpg.*
+/path.c
+/pgstrcasecmp.c
+/strlcpy.c
+/thread.c

@@ -1,0 +1,4 @@
+/exports.list
+/libpgtypes.a
+/libpgtypes.so.*
+/pgstrcasecmp.c

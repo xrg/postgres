@@ -1,0 +1,8 @@
+*.o
+*.so
+*~
+/GNUmakefile
+/config.log
+/config.status
+/src/Makefile.global
+/src/Makefile.port

@@ -1,0 +1,11 @@
+/encnames.c
+/exports.list
+/ip.c
+/libpq.a
+/libpq.so.*
+/md5.c
+/noblock.c
+/pgstrcasecmp.c
+/strlcpy.c
+/thread.c
+/wchar.c
