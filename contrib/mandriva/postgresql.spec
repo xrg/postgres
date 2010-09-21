@@ -24,6 +24,8 @@
 %define libname %mklibname pq%{current_major_version} _%{major}
 %define libecpg %mklibname ecpg%{current_major_version} _%{major_ecpg}
 
+%define _disable_ld_no_undefined 1
+
 Summary: 	PostgreSQL client programs and libraries
 Name:		%{bname}%{current_major_version}
 Version: 	%git_get_ver
@@ -288,17 +290,18 @@ server package.
 %build
 
 %serverbuild
+export LDFLAGS_EX="%ldflags -Wl,--no-undefined"
 
 %configure \
         --disable-rpath \
         --enable-hba \
-	    --enable-locale \
-	    --enable-multibyte \
-	    --enable-syslog\
-	    --with-CXX \
-	    --enable-odbc \
-	    --with-perl \
-	    --with-python \
+        --enable-locale \
+        --enable-multibyte \
+        --enable-syslog\
+        --with-CXX \
+        --enable-odbc \
+        --with-perl \
+        --with-python \
         --with-tcl --with-tclconfig=%{_libdir} \
         --without-tk \
         --with-openssl \
