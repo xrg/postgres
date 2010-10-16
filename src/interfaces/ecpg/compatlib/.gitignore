@@ -1,3 +1,6 @@
+/libecpg_compatdll.def
+/libecpg_compatddll.def
+/blibecpg_compatdll.def
 /exports.list
 /libecpg_compat.a
 /libecpg_compat.so.*

@@ -1,6 +1,7 @@
-/ecpg
-/kwlookup.c
-/pgc.c
+/preproc.y
 /preproc.c
 /preproc.h
-/preproc.y
+/pgc.c
+
+/ecpg
+/kwlookup.c

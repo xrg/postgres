@@ -52,6 +52,8 @@
 
 #define CLUSTERNAME(cluster)	((cluster) == CLUSTER_OLD ? "old" : "new")
 
+#define atooid(x)  ((Oid) strtoul((x), NULL, 10))
+
 /* OID system catalog preservation added during PG 9.0 development */
 #define TABLE_SPACE_SUBDIRS 201001111
 
@@ -376,6 +378,8 @@ char	   *pg_strdup(migratorContext *ctx, const char *s);
 void	   *pg_malloc(migratorContext *ctx, int size);
 void		pg_free(void *ptr);
 const char *getErrorText(int errNum);
+unsigned int str2uint(const char *str);
+
 
 /* version.c */
 

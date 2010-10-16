@@ -1,4 +1,8 @@
+/libecpgdll.def
+/libecpgddll.def
+/blibecpgdll.def
 /exports.list
+
 /libecpg.a
 /libecpg.*
 /path.c

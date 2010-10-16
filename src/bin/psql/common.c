@@ -1386,6 +1386,23 @@ command_no_begin(const char *query)
 			return true;
 		if (wordlen == 10 && pg_strncasecmp(query, "tablespace", 10) == 0)
 			return true;
+		return false;
+	}
+
+	/* DISCARD ALL isn't allowed in xacts, but other variants are allowed. */
+	if (wordlen == 7 && pg_strncasecmp(query, "discard", 7) == 0)
+	{
+		query += wordlen;
+
+		query = skip_white_space(query);
+
+		wordlen = 0;
+		while (isalpha((unsigned char) query[wordlen]))
+			wordlen += PQmblen(&query[wordlen], pset.encoding);
+
+		if (wordlen == 3 && pg_strncasecmp(query, "all", 3) == 0)
+			return true;
+		return false;
 	}
 
 	return false;
