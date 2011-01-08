@@ -389,7 +389,7 @@ create_script_for_old_cluster_deletion(migratorContext *ctx,
 	prep_status(ctx, "Creating script to delete old cluster");
 
 	snprintf(*deletion_script_file_name, MAXPGPATH, "%s/delete_old_cluster.%s",
-			 ctx->cwd, EXEC_EXT);
+			 ctx->cwd, SHELL_EXT);
 
 	if ((script = fopen(*deletion_script_file_name, "w")) == NULL)
 		pg_log(ctx, PG_FATAL, "Could not create necessary file:  %s\n",
@@ -416,6 +416,11 @@ create_script_for_old_cluster_deletion(migratorContext *ctx,
 			int			dbnum;
 
 			fprintf(script, "\n");
+			/* remove PG_VERSION? */
+			if (GET_MAJOR_VERSION(ctx->old.major_version) <= 804)
+				fprintf(script, RM_CMD " %s%s/PG_VERSION\n",
+						ctx->tablespaces[tblnum], ctx->old.tablespace_suffix);
+
 			for (dbnum = 0; dbnum < ctx->new.dbarr.ndbs; dbnum++)
 			{
 				fprintf(script, RMDIR_CMD " %s%s/%d\n",

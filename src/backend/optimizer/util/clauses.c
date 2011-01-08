@@ -2018,11 +2018,16 @@ rowtype_field_matches(Oid rowtypeid, int fieldnum,
  * will not be pre-evaluated here, although we will reduce their
  * arguments as far as possible.
  *
+ * Whenever a function is eliminated from the expression by means of
+ * constant-expression evaluation or inlining, we add the function to
+ * root->glob->invalItems.  This ensures the plan is known to depend on
+ * such functions, even though they aren't referenced anymore.
+ *
  * We assume that the tree has already been type-checked and contains
  * only operators and functions that are reasonable to try to execute.
  *
  * NOTE: "root" can be passed as NULL if the caller never wants to do any
- * Param substitutions.
+ * Param substitutions nor receive info about inlined functions.
  *
  * NOTE: the planner assumes that this will always flatten nested AND and
  * OR clauses into N-argument form.  See comments in prepqual.c.
@@ -2590,7 +2595,18 @@ eval_const_expressions_mutator(Node *node,
 		 * placeholder nodes, so that we have the opportunity to reduce
 		 * constant test conditions.  For example this allows
 		 *		CASE 0 WHEN 0 THEN 1 ELSE 1/0 END
-		 * to reduce to 1 rather than drawing a divide-by-0 error.
+		 * to reduce to 1 rather than drawing a divide-by-0 error.  Note
+		 * that when the test expression is constant, we don't have to
+		 * include it in the resulting CASE; for example
+		 *		CASE 0 WHEN x THEN y ELSE z END
+		 * is transformed by the parser to
+		 *		CASE 0 WHEN CaseTestExpr = x THEN y ELSE z END
+		 * which we can simplify to
+		 *		CASE WHEN 0 = x THEN y ELSE z END
+		 * It is not necessary for the executor to evaluate the "arg"
+		 * expression when executing the CASE, since any contained
+		 * CaseTestExprs that might have referred to it will have been
+		 * replaced by the constant.
 		 *----------
 		 */
 		CaseExpr   *caseexpr = (CaseExpr *) node;
@@ -2609,7 +2625,10 @@ eval_const_expressions_mutator(Node *node,
 		/* Set up for contained CaseTestExpr nodes */
 		save_case_val = context->case_val;
 		if (newarg && IsA(newarg, Const))
+		{
 			context->case_val = newarg;
+			newarg = NULL;		/* not needed anymore, see comment above */
+		}
 		else
 			context->case_val = NULL;
 
@@ -2753,7 +2772,9 @@ eval_const_expressions_mutator(Node *node,
 			/*
 			 * We can remove null constants from the list. For a non-null
 			 * constant, if it has not been preceded by any other
-			 * non-null-constant expressions then that is the result.
+			 * non-null-constant expressions then it is the result.  Otherwise,
+			 * it's the next argument, but we can drop following arguments
+			 * since they will never be reached.
 			 */
 			if (IsA(e, Const))
 			{
@@ -2761,6 +2782,8 @@ eval_const_expressions_mutator(Node *node,
 					continue;	/* drop null constant */
 				if (newargs == NIL)
 					return e;	/* first expr */
+				newargs = lappend(newargs, e);
+				break;
 			}
 			newargs = lappend(newargs, e);
 		}
@@ -3680,6 +3703,10 @@ evaluate_function(Oid funcid, Oid result_type, int32 result_typmod, List *args,
  * We must also beware of changing the volatility or strictness status of
  * functions by inlining them.
  *
+ * Also, at the moment we can't inline functions returning RECORD.  This
+ * doesn't work in the general case because it discards information such
+ * as OUT-parameter declarations.
+ *
  * Returns a simplified expression if successful, or NULL if cannot
  * simplify the function.
  */
@@ -3712,6 +3739,7 @@ inline_function(Oid funcid, Oid result_type, List *args,
 	if (funcform->prolang != SQLlanguageId ||
 		funcform->prosecdef ||
 		funcform->proretset ||
+		funcform->prorettype == RECORDOID ||
 		!heap_attisnull(func_tuple, Anum_pg_proc_proconfig) ||
 		funcform->pronargs != list_length(args))
 		return NULL;
@@ -4107,6 +4135,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	bool		modifyTargetList;
 	MemoryContext oldcxt;
 	MemoryContext mycxt;
+	List	   *saveInvalItems;
 	inline_error_callback_arg callback_arg;
 	ErrorContextCallback sqlerrcontext;
 	List	   *raw_parsetree_list;
@@ -4192,6 +4221,16 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 								  ALLOCSET_DEFAULT_INITSIZE,
 								  ALLOCSET_DEFAULT_MAXSIZE);
 	oldcxt = MemoryContextSwitchTo(mycxt);
+
+	/*
+	 * When we call eval_const_expressions below, it might try to add items
+	 * to root->glob->invalItems.  Since it is running in the temp context,
+	 * those items will be in that context, and will need to be copied out
+	 * if we're successful.  Temporarily reset the list so that we can keep
+	 * those items separate from the pre-existing list contents.
+	 */
+	saveInvalItems = root->glob->invalItems;
+	root->glob->invalItems = NIL;
 
 	/* Fetch the function body */
 	tmp = SysCacheGetAttr(PROCOID,
@@ -4319,6 +4358,10 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 
 	querytree = copyObject(querytree);
 
+	/* copy up any new invalItems, too */
+	root->glob->invalItems = list_concat(saveInvalItems,
+										 copyObject(root->glob->invalItems));
+
 	MemoryContextDelete(mycxt);
 	error_context_stack = sqlerrcontext.previous;
 	ReleaseSysCache(func_tuple);
@@ -4334,6 +4377,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	/* Here if func is not inlinable: release temp memory and return NULL */
 fail:
 	MemoryContextSwitchTo(oldcxt);
+	root->glob->invalItems = saveInvalItems;
 	MemoryContextDelete(mycxt);
 	error_context_stack = sqlerrcontext.previous;
 	ReleaseSysCache(func_tuple);

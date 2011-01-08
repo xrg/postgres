@@ -219,6 +219,7 @@ static void get_opclass_name(Oid opclass, Oid actual_datatype,
 static Node *processIndirection(Node *node, deparse_context *context,
 				   bool printit);
 static void printSubscripts(ArrayRef *aref, deparse_context *context);
+static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_function_name(Oid funcid, int nargs, List *argnames,
 					   Oid *argtypes, bool *is_variadic);
@@ -832,7 +833,7 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 
 	indexpr_item = list_head(indexprs);
 
-	context = deparse_context_for(get_rel_name(indrelid), indrelid);
+	context = deparse_context_for(get_relation_name(indrelid), indrelid);
 
 	/*
 	 * Start the index definition.	Note that the index's name should never be
@@ -1236,7 +1237,7 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 				if (conForm->conrelid != InvalidOid)
 				{
 					/* relation constraint */
-					context = deparse_context_for(get_rel_name(conForm->conrelid),
+					context = deparse_context_for(get_relation_name(conForm->conrelid),
 												  conForm->conrelid);
 				}
 				else
@@ -4905,23 +4906,19 @@ get_rule_expr(Node *node, deparse_context *context,
 						 * boolexpr WHEN TRUE THEN ...", then the optimizer's
 						 * simplify_boolean_equality() may have reduced this
 						 * to just "CaseTestExpr" or "NOT CaseTestExpr", for
-						 * which we have to show "TRUE" or "FALSE".  Also,
-						 * depending on context the original CaseTestExpr
-						 * might have been reduced to a Const (but we won't
-						 * see "WHEN Const").  We have also to consider the
-						 * possibility that an implicit coercion was inserted
-						 * between the CaseTestExpr and the operator.
+						 * which we have to show "TRUE" or "FALSE".  We have
+						 * also to consider the possibility that an implicit
+						 * coercion was inserted between the CaseTestExpr and
+						 * the operator.
 						 */
 						if (IsA(w, OpExpr))
 						{
 							List	   *args = ((OpExpr *) w)->args;
-							Node	   *lhs;
 							Node	   *rhs;
 
 							Assert(list_length(args) == 2);
-							lhs = strip_implicit_coercions(linitial(args));
-							Assert(IsA(lhs, CaseTestExpr) ||
-								   IsA(lhs, Const));
+							Assert(IsA(strip_implicit_coercions(linitial(args)),
+									   CaseTestExpr));
 							rhs = (Node *) lsecond(args);
 							get_rule_expr(rhs, context, false);
 						}
@@ -6074,7 +6071,7 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			gavealias = true;
 		}
 		else if (rte->rtekind == RTE_RELATION &&
-				 strcmp(rte->eref->aliasname, get_rel_name(rte->relid)) != 0)
+				 strcmp(rte->eref->aliasname, get_relation_name(rte->relid)) != 0)
 		{
 			/*
 			 * Apparently the rel has been renamed since the rule was made.
@@ -6572,6 +6569,23 @@ quote_qualified_identifier(const char *qualifier,
 		appendStringInfo(&buf, "%s.", quote_identifier(qualifier));
 	appendStringInfoString(&buf, quote_identifier(ident));
 	return buf.data;
+}
+
+/*
+ * get_relation_name
+ *		Get the unqualified name of a relation specified by OID
+ *
+ * This differs from the underlying get_rel_name() function in that it will
+ * throw error instead of silently returning NULL if the OID is bad.
+ */
+static char *
+get_relation_name(Oid relid)
+{
+	char	   *relname = get_rel_name(relid);
+
+	if (!relname)
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+	return relname;
 }
 
 /*

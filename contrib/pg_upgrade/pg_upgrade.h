@@ -38,15 +38,17 @@
 #define pg_copy_file		copy_file
 #define pg_mv_file			rename
 #define pg_link_file		link
+#define RM_CMD				"rm -f"
 #define RMDIR_CMD			"rm -rf"
-#define EXEC_EXT			"sh"
+#define SHELL_EXT			"sh"
 #else
 #define pg_copy_file		CopyFile
 #define pg_mv_file			pgrename
 #define pg_link_file		win32_pghardlink
 #define sleep(x)			Sleep(x * 1000)
+#define RM_CMD				"DEL /q"
 #define RMDIR_CMD			"RMDIR /s/q"
-#define EXEC_EXT			"bat"
+#define SHELL_EXT			"bat"
 #define EXE_EXT				".exe"
 #endif
 
