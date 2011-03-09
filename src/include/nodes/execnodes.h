@@ -407,25 +407,41 @@ typedef struct EState
  * When doing UPDATE, DELETE, or SELECT FOR UPDATE/SHARE, we should have an
  * ExecRowMark for each non-target relation in the query (except inheritance
  * parent RTEs, which can be ignored at runtime).  See PlanRowMark for details
- * about most of the fields.
+ * about most of the fields.  In addition to fields directly derived from
+ * PlanRowMark, we store curCtid, which is used by the WHERE CURRENT OF code.
  *
- * es_rowMarks is a list of these structs.	Each LockRows node has its own
- * list, which is the subset of locks that it is supposed to enforce; note
- * that the per-node lists point to the same structs that are in the global
- * list.
+ * EState->es_rowMarks is a list of these structs.
  */
 typedef struct ExecRowMark
 {
 	Relation	relation;		/* opened and suitably locked relation */
 	Index		rti;			/* its range table index */
 	Index		prti;			/* parent range table index, if child */
+	Index		rowmarkId;		/* unique identifier for resjunk columns */
 	RowMarkType markType;		/* see enum in nodes/plannodes.h */
 	bool		noWait;			/* NOWAIT option */
+	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
+} ExecRowMark;
+
+/*
+ * ExecAuxRowMark -
+ *	   additional runtime representation of FOR UPDATE/SHARE clauses
+ *
+ * Each LockRows and ModifyTable node keeps a list of the rowmarks it needs to
+ * deal with.  In addition to a pointer to the related entry in es_rowMarks,
+ * this struct carries the column number(s) of the resjunk columns associated
+ * with the rowmark (see comments for PlanRowMark for more detail).  In the
+ * case of ModifyTable, there has to be a separate ExecAuxRowMark list for
+ * each child plan, because the resjunk columns could be at different physical
+ * column positions in different subplans.
+ */
+typedef struct ExecAuxRowMark
+{
+	ExecRowMark *rowmark;		/* related entry in es_rowMarks */
 	AttrNumber	ctidAttNo;		/* resno of ctid junk attribute, if any */
 	AttrNumber	toidAttNo;		/* resno of tableoid junk attribute, if any */
 	AttrNumber	wholeAttNo;		/* resno of whole-row junk attribute, if any */
-	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
-} ExecRowMark;
+} ExecAuxRowMark;
 
 
 /* ----------------------------------------------------------------
@@ -1002,7 +1018,7 @@ typedef struct EPQState
 	PlanState  *planstate;		/* plan state tree ready to be executed */
 	TupleTableSlot *origslot;	/* original output tuple to be rechecked */
 	Plan	   *plan;			/* plan tree to be executed */
-	List	   *rowMarks;		/* ExecRowMarks (non-locking only) */
+	List	   *arowMarks;		/* ExecAuxRowMarks (non-locking only) */
 	int			epqParam;		/* ID of Param to force scan node re-eval */
 } EPQState;
 
@@ -1030,6 +1046,7 @@ typedef struct ModifyTableState
 	PlanState **mt_plans;		/* subplans (one per target rel) */
 	int			mt_nplans;		/* number of plans in the array */
 	int			mt_whichplan;	/* which one is being executed (0..n-1) */
+	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
 } ModifyTableState;
@@ -1706,7 +1723,7 @@ typedef struct SetOpState
 typedef struct LockRowsState
 {
 	PlanState	ps;				/* its first field is NodeTag */
-	List	   *lr_rowMarks;	/* List of ExecRowMarks */
+	List	   *lr_arowMarks;	/* List of ExecAuxRowMarks */
 	EPQState	lr_epqstate;	/* for evaluating EvalPlanQual rechecks */
 } LockRowsState;
 

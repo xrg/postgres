@@ -2908,7 +2908,7 @@ ProcessInterrupts(void)
 					 errdetail_recovery_conflict()));
 		else if (RecoveryConflictPending)
 			ereport(FATAL,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					(errcode(ERRCODE_DATABASE_DROPPED),
 			  errmsg("terminating connection due to conflict with recovery"),
 					 errdetail_recovery_conflict()));
 		else
@@ -2995,7 +2995,9 @@ ProcessInterrupts(void)
  */
 #if defined(__ia64__) || defined(__ia64)
 
+#ifdef __INTEL_COMPILER
 #include <asm/ia64regs.h>
+#endif
 
 static __inline__ char *
 ia64_get_bsp(void)

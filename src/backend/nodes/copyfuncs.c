@@ -856,12 +856,10 @@ _copyPlanRowMark(PlanRowMark *from)
 
 	COPY_SCALAR_FIELD(rti);
 	COPY_SCALAR_FIELD(prti);
+	COPY_SCALAR_FIELD(rowmarkId);
 	COPY_SCALAR_FIELD(markType);
 	COPY_SCALAR_FIELD(noWait);
 	COPY_SCALAR_FIELD(isParent);
-	COPY_SCALAR_FIELD(ctidAttNo);
-	COPY_SCALAR_FIELD(toidAttNo);
-	COPY_SCALAR_FIELD(wholeAttNo);
 
 	return newnode;
 }

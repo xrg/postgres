@@ -756,12 +756,10 @@ _outPlanRowMark(StringInfo str, PlanRowMark *node)
 
 	WRITE_UINT_FIELD(rti);
 	WRITE_UINT_FIELD(prti);
+	WRITE_UINT_FIELD(rowmarkId);
 	WRITE_ENUM_FIELD(markType, RowMarkType);
 	WRITE_BOOL_FIELD(noWait);
 	WRITE_BOOL_FIELD(isParent);
-	WRITE_INT_FIELD(ctidAttNo);
-	WRITE_INT_FIELD(toidAttNo);
-	WRITE_INT_FIELD(wholeAttNo);
 }
 
 static void
@@ -1527,6 +1525,7 @@ _outPlannerGlobal(StringInfo str, PlannerGlobal *node)
 	WRITE_NODE_FIELD(relationOids);
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_UINT_FIELD(lastPHId);
+	WRITE_UINT_FIELD(lastRowMarkId);
 	WRITE_BOOL_FIELD(transientPlan);
 }
 
@@ -1612,10 +1611,12 @@ _outIndexOptInfo(StringInfo str, IndexOptInfo *node)
 	WRITE_UINT_FIELD(pages);
 	WRITE_FLOAT_FIELD(tuples, "%.0f");
 	WRITE_INT_FIELD(ncolumns);
+	WRITE_OID_FIELD(relam);
 	WRITE_NODE_FIELD(indexprs);
 	WRITE_NODE_FIELD(indpred);
 	WRITE_BOOL_FIELD(predOK);
 	WRITE_BOOL_FIELD(unique);
+	WRITE_BOOL_FIELD(hypothetical);
 }
 
 static void

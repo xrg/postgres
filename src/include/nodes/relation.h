@@ -82,6 +82,8 @@ typedef struct PlannerGlobal
 
 	Index		lastPHId;		/* highest PlaceHolderVar ID assigned */
 
+	Index		lastRowMarkId;	/* highest PlanRowMark ID assigned */
+
 	bool		transientPlan;	/* redo plan when TransactionXmin changes? */
 } PlannerGlobal;
 
@@ -469,6 +471,8 @@ typedef struct IndexOptInfo
 	bool		amsearchnulls;	/* can AM search for NULL/NOT NULL entries? */
 	bool		amhasgettuple;	/* does AM have amgettuple interface? */
 	bool		amhasgetbitmap; /* does AM have amgetbitmap interface? */
+	/* added in 9.0.4: */
+	bool		hypothetical;	/* true if index doesn't really exist */
 } IndexOptInfo;
 
 
