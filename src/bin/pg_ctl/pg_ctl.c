@@ -155,6 +155,9 @@ write_eventlog(int level, const char *line)
 {
 	static HANDLE evtHandle = INVALID_HANDLE_VALUE;
 
+	if (silent_mode && level == EVENTLOG_INFORMATION_TYPE)
+		return;
+
 	if (evtHandle == INVALID_HANDLE_VALUE)
 	{
 		evtHandle = RegisterEventSource(NULL, "PostgreSQL");
@@ -1131,6 +1134,9 @@ pgwin32_CommandLine(bool registration)
 		/* concatenate */
 		sprintf(cmdLine + strlen(cmdLine), " -t %d", wait_seconds);
 
+	if (registration && silent_mode)
+		strcat(cmdLine, " -s");
+
 	if (post_opts)
 	{
 		strcat(cmdLine, " ");
@@ -1293,7 +1299,7 @@ pgwin32_ServiceMain(DWORD argc, LPTSTR *argv)
 		write_eventlog(EVENTLOG_INFORMATION_TYPE, _("Waiting for server startup...\n"));
 		if (test_postmaster_connection(true) == false)
 		{
-			write_eventlog(EVENTLOG_INFORMATION_TYPE, _("Timed out waiting for server startup\n"));
+			write_eventlog(EVENTLOG_ERROR_TYPE, _("Timed out waiting for server startup\n"));
 			pgwin32_SetServiceStatus(SERVICE_STOPPED);
 			return;
 		}

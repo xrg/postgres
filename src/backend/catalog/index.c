@@ -258,7 +258,8 @@ ConstructTupleDescriptor(Relation heapRelation,
 			 * whether a table column is of a safe type (which is why we
 			 * needn't check for the non-expression case).
 			 */
-			CheckAttributeType(NameStr(to->attname), to->atttypid, false);
+			CheckAttributeType(NameStr(to->attname), to->atttypid,
+							   NIL, false);
 		}
 
 		/*
@@ -956,7 +957,7 @@ index_create(Oid heapRelationId,
 	}
 	else
 	{
-		index_build(heapRelation, indexRelation, indexInfo, isprimary);
+		index_build(heapRelation, indexRelation, indexInfo, isprimary, false);
 	}
 
 	/*
@@ -1388,8 +1389,11 @@ index_update_stats(Relation rel,
  * entries of the index and heap relation as needed, using statistics
  * returned by ambuild as well as data passed by the caller.
  *
- * Note: when reindexing an existing index, isprimary can be false;
- * the index is already properly marked and need not be re-marked.
+ * isprimary tells whether to mark the index as a primary-key index.
+ * isreindex indicates we are recreating a previously-existing index.
+ *
+ * Note: when reindexing an existing index, isprimary can be false even if
+ * the index is a PK; it's already properly marked and need not be re-marked.
  *
  * Note: before Postgres 8.2, the passed-in heap and index Relations
  * were automatically closed by this routine.  This is no longer the case.
@@ -1399,7 +1403,8 @@ void
 index_build(Relation heapRelation,
 			Relation indexRelation,
 			IndexInfo *indexInfo,
-			bool isprimary)
+			bool isprimary,
+			bool isreindex)
 {
 	RegProcedure procedure;
 	IndexBuildResult *stats;
@@ -1453,8 +1458,15 @@ index_build(Relation heapRelation,
 	 * If we found any potentially broken HOT chains, mark the index as not
 	 * being usable until the current transaction is below the event horizon.
 	 * See src/backend/access/heap/README.HOT for discussion.
+	 *
+	 * However, when reindexing an existing index, we should do nothing here.
+	 * Any HOT chains that are broken with respect to the index must predate
+	 * the index's original creation, so there is no need to change the
+	 * index's usability horizon.  Moreover, we *must not* try to change
+	 * the index's pg_index entry while reindexing pg_index itself, and this
+	 * optimization nicely prevents that.
 	 */
-	if (indexInfo->ii_BrokenHotChain)
+	if (indexInfo->ii_BrokenHotChain && !isreindex)
 	{
 		Oid			indexId = RelationGetRelid(indexRelation);
 		Relation	pg_index;
@@ -1468,6 +1480,9 @@ index_build(Relation heapRelation,
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", indexId);
 		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+		/* If it's a new index, indcheckxmin shouldn't be set ... */
+		Assert(!indexForm->indcheckxmin);
 
 		indexForm->indcheckxmin = true;
 		simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
@@ -1519,8 +1534,9 @@ index_build(Relation heapRelation,
  *
  * A side effect is to set indexInfo->ii_BrokenHotChain to true if we detect
  * any potentially broken HOT chains.  Currently, we set this if there are
- * any RECENTLY_DEAD entries in a HOT chain, without trying very hard to
- * detect whether they're really incompatible with the chain tip.
+ * any RECENTLY_DEAD or DELETE_IN_PROGRESS entries in a HOT chain, without
+ * trying very hard to detect whether they're really incompatible with the
+ * chain tip.
  */
 double
 IndexBuildHeapScan(Relation heapRelation,
@@ -1632,8 +1648,14 @@ IndexBuildHeapScan(Relation heapRelation,
 		 * buffer continuously while visiting the page, so no pruning
 		 * operation can occur either.
 		 *
+		 * Also, although our opinions about tuple liveness could change while
+		 * we scan the page (due to concurrent transaction commits/aborts),
+		 * the chain root locations won't, so this info doesn't need to be
+		 * rebuilt after waiting for another transaction.
+		 *
 		 * Note the implied assumption that there is no more than one live
-		 * tuple per HOT-chain ...
+		 * tuple per HOT-chain --- else we could create more than one index
+		 * entry pointing to the same root tuple.
 		 */
 		if (scan->rs_cblock != root_blkno)
 		{
@@ -1687,11 +1709,6 @@ IndexBuildHeapScan(Relation heapRelation,
 					 * the live tuple at the end of the HOT-chain.	Since this
 					 * breaks semantics for pre-existing snapshots, mark the
 					 * index as unusable for them.
-					 *
-					 * If we've already decided that the index will be unsafe
-					 * for old snapshots, we may as well stop indexing
-					 * recently-dead tuples, since there's no longer any
-					 * point.
 					 */
 					if (HeapTupleIsHotUpdated(heapTuple))
 					{
@@ -1699,8 +1716,6 @@ IndexBuildHeapScan(Relation heapRelation,
 						/* mark the index as unsafe for old snapshots */
 						indexInfo->ii_BrokenHotChain = true;
 					}
-					else if (indexInfo->ii_BrokenHotChain)
-						indexIt = false;
 					else
 						indexIt = true;
 					/* In any case, exclude the tuple from unique-checking */
@@ -1750,7 +1765,8 @@ IndexBuildHeapScan(Relation heapRelation,
 				case HEAPTUPLE_DELETE_IN_PROGRESS:
 
 					/*
-					 * Similar situation to INSERT_IN_PROGRESS case.
+					 * As with INSERT_IN_PROGRESS case, this is unexpected
+					 * unless it's our own deletion or a system catalog.
 					 */
 					Assert(!(heapTuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI));
 					xwait = HeapTupleHeaderGetXmax(heapTuple->t_data);
@@ -1765,8 +1781,17 @@ IndexBuildHeapScan(Relation heapRelation,
 						 * the tuple is dead could lead to missing a
 						 * uniqueness violation.  In that case we wait for the
 						 * deleting transaction to finish and check again.
+						 *
+						 * Also, if it's a HOT-updated tuple, we should not
+						 * index it but rather the live tuple at the end of
+						 * the HOT-chain.  However, the deleting transaction
+						 * could abort, possibly leaving this tuple as live
+						 * after all, in which case it has to be indexed. The
+						 * only way to know what to do is to wait for the
+						 * deleting transaction to finish and check again.
 						 */
-						if (checking_uniqueness)
+						if (checking_uniqueness ||
+							HeapTupleIsHotUpdated(heapTuple))
 						{
 							/*
 							 * Must drop the lock on the buffer before we wait
@@ -1775,22 +1800,34 @@ IndexBuildHeapScan(Relation heapRelation,
 							XactLockTableWait(xwait);
 							goto recheck;
 						}
-					}
 
-					/*
-					 * Otherwise, we have to treat these tuples just like
-					 * RECENTLY_DELETED ones.
-					 */
-					if (HeapTupleIsHotUpdated(heapTuple))
+						/*
+						 * Otherwise index it but don't check for uniqueness,
+						 * the same as a RECENTLY_DEAD tuple.
+						 */
+						indexIt = true;
+					}
+					else if (HeapTupleIsHotUpdated(heapTuple))
 					{
+						/*
+						 * It's a HOT-updated tuple deleted by our own xact.
+						 * We can assume the deletion will commit (else the
+						 * index contents don't matter), so treat the same
+						 * as RECENTLY_DEAD HOT-updated tuples.
+						 */
 						indexIt = false;
 						/* mark the index as unsafe for old snapshots */
 						indexInfo->ii_BrokenHotChain = true;
 					}
-					else if (indexInfo->ii_BrokenHotChain)
-						indexIt = false;
 					else
+					{
+						/*
+						 * It's a regular tuple deleted by our own xact.
+						 * Index it but don't check for uniqueness, the same
+						 * as a RECENTLY_DEAD tuple.
+						 */
 						indexIt = true;
+					}
 					/* In any case, exclude the tuple from unique-checking */
 					tupleIsAlive = false;
 					break;
@@ -2460,7 +2497,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 
 		/* Initialize the index and rebuild */
 		/* Note: we do not need to re-establish pkey setting */
-		index_build(heapRelation, iRel, indexInfo, false);
+		index_build(heapRelation, iRel, indexInfo, false, true);
 	}
 	PG_CATCH();
 	{
@@ -2479,7 +2516,22 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 	 *
 	 * We can also reset indcheckxmin, because we have now done a
 	 * non-concurrent index build, *except* in the case where index_build
-	 * found some still-broken HOT chains.
+	 * found some still-broken HOT chains.  If it did, we normally leave
+	 * indcheckxmin alone (note that index_build won't have changed it,
+	 * because this is a reindex).  But if the index was invalid or not ready
+	 * and there were broken HOT chains, it seems best to force indcheckxmin
+	 * true, because the normal argument that the HOT chains couldn't conflict
+	 * with the index is suspect for an invalid index.
+	 *
+	 * Note that it is important to not update the pg_index entry if we don't
+	 * have to, because updating it will move the index's usability horizon
+	 * (recorded as the tuple's xmin value) if indcheckxmin is true.  We don't
+	 * really want REINDEX to move the usability horizon forward ever, but we
+	 * have no choice if we are to fix indisvalid or indisready.  Of course,
+	 * clearing indcheckxmin eliminates the issue, so we're happy to do that
+	 * if we can.  Another reason for caution here is that while reindexing
+	 * pg_index itself, we must not try to update it.  We assume that
+	 * pg_index's indexes will always have these flags in their clean state.
 	 */
 	if (!skipped_constraint)
 	{
@@ -2494,10 +2546,12 @@ reindex_index(Oid indexId, bool skip_constraint_checks)
 		if (!indexForm->indisvalid || !indexForm->indisready ||
 			(indexForm->indcheckxmin && !indexInfo->ii_BrokenHotChain))
 		{
-			indexForm->indisvalid = true;
-			indexForm->indisready = true;
 			if (!indexInfo->ii_BrokenHotChain)
 				indexForm->indcheckxmin = false;
+			else if (!indexForm->indisvalid || !indexForm->indisready)
+				indexForm->indcheckxmin = true;
+			indexForm->indisvalid = true;
+			indexForm->indisready = true;
 			simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
 			CatalogUpdateIndexes(pg_index, indexTuple);
 		}
