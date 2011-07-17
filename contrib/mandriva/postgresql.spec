@@ -26,6 +26,10 @@
 
 %define _disable_ld_no_undefined 1
 
+%if %{_target_vendor} == mageia
+%define mdkversion 201100
+%endif
+
 Summary: 	PostgreSQL client programs and libraries
 Name:		%{bname}%{current_major_version}
 Version: 	%git_get_ver
