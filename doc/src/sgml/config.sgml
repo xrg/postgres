@@ -1416,11 +1416,18 @@ SET ENABLE_SEQSCAN TO OFF;
         This parameter can only be set at server start.
        </para>
        <para>
-        In <literal>minimal</> level, WAL-logging of some bulk operations, like
-        <command>CREATE INDEX</>, <command>CLUSTER</> and <command>COPY</> on
-        a table that was created or truncated in the same transaction can be
-        safely skipped, which can make those operations much faster (see
-        <xref linkend="populate-pitr">). But minimal WAL does not contain
+        In <literal>minimal</> level, WAL-logging of some bulk
+        operations can be safely skipped, which can make those
+        operations much faster (see <xref linkend="populate-pitr">).
+        Operations in which this optimization can be applied include:
+        <simplelist>
+         <member><command>CREATE TABLE AS</></member>
+         <member><command>CREATE INDEX</></member>
+         <member><command>CLUSTER</></member>
+         <member><command>COPY</> into tables that were created or truncated in the same
+         transaction</member>
+        </simplelist>
+        But minimal WAL does not contain
         enough information to reconstruct the data from a base backup and the
         WAL logs, so either <literal>archive</> or <literal>hot_standby</>
         level must be used to enable
@@ -4285,9 +4292,11 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <para>
         The current effective value of the search path can be examined
         via the <acronym>SQL</acronym> function
-        <function>current_schemas()</>.  This is not quite the same as
+        <function>current_schemas</>
+        (see <xref linkend="functions-info">).
+        This is not quite the same as
         examining the value of <varname>search_path</varname>, since
-        <function>current_schemas()</> shows how the items
+        <function>current_schemas</> shows how the items
         appearing in <varname>search_path</varname> were resolved.
        </para>
 
@@ -4952,7 +4961,7 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
        </para>
 
        <para>
-        Unlike <varname>local_preload_libraries</>, there is no
+        Unlike <xref linkend="guc-shared-preload-libraries">, there is no
         performance advantage to loading a library at session
         start rather than when it is first used.  Rather, the intent of
         this feature is to allow debugging or performance-measurement

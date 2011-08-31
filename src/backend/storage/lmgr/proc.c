@@ -179,6 +179,9 @@ InitProcGlobal(void)
 	 */
 	ProcGlobal->freeProcs = NULL;
 	ProcGlobal->autovacFreeProcs = NULL;
+	ProcGlobal->startupProc = NULL;
+	ProcGlobal->startupProcPid = 0;
+	ProcGlobal->startupBufferPinWaitBufId = -1;
 
 	ProcGlobal->spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 
@@ -487,7 +490,6 @@ PublishStartupProcessInformation(void)
 
 	procglobal->startupProc = MyProc;
 	procglobal->startupProcPid = MyProcPid;
-	procglobal->startupBufferPinWaitBufId = 0;
 
 	SpinLockRelease(ProcStructLock);
 }
@@ -514,14 +516,10 @@ SetStartupBufferPinWaitBufId(int bufid)
 int
 GetStartupBufferPinWaitBufId(void)
 {
-	int			bufid;
-
 	/* use volatile pointer to prevent code rearrangement */
 	volatile PROC_HDR *procglobal = ProcGlobal;
 
-	bufid = procglobal->startupBufferPinWaitBufId;
-
-	return bufid;
+	return procglobal->startupBufferPinWaitBufId;
 }
 
 /*
@@ -928,6 +926,15 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	 * LockWaitCancel will clean up if cancel/die happens.
 	 */
 	LWLockRelease(partitionLock);
+
+	/*
+	 * Also, now that we will successfully clean up after an ereport, it's
+	 * safe to check to see if there's a buffer pin deadlock against the
+	 * Startup process.  Of course, that's only necessary if we're doing
+	 * Hot Standby and are not the Startup process ourselves.
+	 */
+	if (RecoveryInProgress() && !InRecovery)
+		CheckRecoveryConflictDeadlock();
 
 	/* Reset deadlock_state before enabling the signal handler */
 	deadlock_state = DS_NOT_YET_CHECKED;

@@ -61,8 +61,11 @@ old_8_3_check_for_name_data_type_usage(migratorContext *ctx, Cluster whichCluste
 								"		NOT a.attisdropped AND "
 								"		a.atttypid = 'pg_catalog.name'::pg_catalog.regtype AND "
 								"		c.relnamespace = n.oid AND "
-							  "		n.nspname != 'pg_catalog' AND "
-						 "		n.nspname != 'information_schema'");
+								/* exclude possibly orphaned temp tables */
+							 	"		n.nspname != 'pg_catalog' AND "
+								"		n.nspname !~ '^pg_temp_' AND "
+								"		n.nspname !~ '^pg_toast_temp_' AND "
+								"		n.nspname != 'information_schema' ");
 
 		ntups = PQntuples(res);
 		i_nspname = PQfnumber(res, "nspname");
@@ -151,8 +154,11 @@ old_8_3_check_for_tsquery_usage(migratorContext *ctx, Cluster whichCluster)
 								"		NOT a.attisdropped AND "
 								"		a.atttypid = 'pg_catalog.tsquery'::pg_catalog.regtype AND "
 								"		c.relnamespace = n.oid AND "
-							  "		n.nspname != 'pg_catalog' AND "
-						 "		n.nspname != 'information_schema'");
+								/* exclude possibly orphaned temp tables */
+							 	"		n.nspname != 'pg_catalog' AND "
+								"		n.nspname !~ '^pg_temp_' AND "
+								"		n.nspname !~ '^pg_toast_temp_' AND "
+								"		n.nspname != 'information_schema' ");
 
 		ntups = PQntuples(res);
 		i_nspname = PQfnumber(res, "nspname");
@@ -250,8 +256,11 @@ old_8_3_rebuild_tsvector_tables(migratorContext *ctx, bool check_mode,
 								"		NOT a.attisdropped AND "
 								"		a.atttypid = 'pg_catalog.tsvector'::pg_catalog.regtype AND "
 								"		c.relnamespace = n.oid AND "
-							  "		n.nspname != 'pg_catalog' AND "
-						 "		n.nspname != 'information_schema'");
+								/* exclude possibly orphaned temp tables */
+							 	"		n.nspname != 'pg_catalog' AND "
+								"		n.nspname !~ '^pg_temp_' AND "
+								"		n.nspname !~ '^pg_toast_temp_' AND "
+								"		n.nspname != 'information_schema' ");
 
 /*
  *	This macro is used below to avoid reindexing indexes already rebuilt
@@ -268,8 +277,10 @@ old_8_3_rebuild_tsvector_tables(migratorContext *ctx, bool check_mode,
 								"		NOT a.attisdropped AND "		\
 								"		a.atttypid = 'pg_catalog.tsvector'::pg_catalog.regtype AND " \
 								"		c.relnamespace = n.oid AND "	\
-								"		n.nspname != 'pg_catalog' AND " \
-								"		n.nspname != 'information_schema') "
+							 	"		n.nspname != 'pg_catalog' AND " \
+								"		n.nspname !~ '^pg_temp_' AND " \
+								"		n.nspname !~ '^pg_toast_temp_' AND " \
+								"		n.nspname != 'information_schema')"
 
 		ntups = PQntuples(res);
 		i_nspname = PQfnumber(res, "nspname");
@@ -638,8 +649,12 @@ old_8_3_create_sequence_script(migratorContext *ctx, Cluster whichCluster)
 								"		pg_catalog.pg_namespace n "
 								"WHERE	c.relkind = 'S' AND "
 								"		c.relnamespace = n.oid AND "
-							  "		n.nspname != 'pg_catalog' AND "
-						 "		n.nspname != 'information_schema'");
+								/* exclude possibly orphaned temp tables */
+							 	"		n.nspname != 'pg_catalog' AND "
+								"		n.nspname !~ '^pg_temp_' AND "
+								"		n.nspname !~ '^pg_toast_temp_' AND "
+								"		n.nspname != 'information_schema' ");
+
 
 		ntups = PQntuples(res);
 		i_nspname = PQfnumber(res, "nspname");
