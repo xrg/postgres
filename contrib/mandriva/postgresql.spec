@@ -386,7 +386,7 @@ mv $RPM_BUILD_ROOT%{_docdir}/%{bname}/html $RPM_BUILD_ROOT%{_docdir}/%{name}-doc
 
 echo -n '' > main.lst
 for i in \
-    pg_ctl initdb pg_config psql pg_dump pgscripts libpq libecpg \
+    pg_basebackup pg_ctl initdb pg_config psql pg_dump pgscripts libpq libecpg \
     ecpg libpq%{major} ecpglib%{major_ecpg}; do
     %find_lang $i-%{current_major_version}
     cat $i-%{current_major_version}.lang >> main.lst
@@ -405,8 +405,9 @@ done
 # postgres.lang pg_resetxlog.lang pg_controldata.lang \
 # libpq.lang libecpg.lang \
 
-# taken directly in build dir.
-rm -fr $RPM_BUILD_ROOT%{_datadir}/doc/postgresql/contrib/
+# Let them ship with the 'doc' sub-package
+mv $RPM_BUILD_ROOT%{_datadir}/doc/postgresql/extension \
+    $RPM_BUILD_ROOT%{_docdir}/%{name}-docs-%{version}
 
 #(
 #cd postgresql-mdk
@@ -507,7 +508,7 @@ exit 1
 
 %files -f main.lst 
 %defattr(-,root,root)
-%doc doc/KNOWN_BUGS doc/MISSING_FEATURES doc/README* 
+%doc doc/KNOWN_BUGS doc/MISSING_FEATURES 
 %doc COPYRIGHT README doc/bug.template
 %{_bindir}/clusterdb
 %{_bindir}/createdb
@@ -516,6 +517,7 @@ exit 1
 %{_bindir}/dropdb
 %{_bindir}/droplang
 %{_bindir}/dropuser
+%{_bindir}/pg_basebackup
 %{_bindir}/pg_dump
 %{_bindir}/pg_dumpall
 %{_bindir}/pg_restore
@@ -529,6 +531,7 @@ exit 1
 %{_mandir}/man1/dropdb.*
 %{_mandir}/man1/droplang.*
 %{_mandir}/man1/dropuser.*
+%{_mandir}/man1/pg_basebackup.1*
 %{_mandir}/man1/pg_dump.*
 %{_mandir}/man1/pg_dumpall.*
 %{_mandir}/man1/pg_restore.*
@@ -596,7 +599,7 @@ exit 1
 %{_datadir}/postgresql/snowball_create.sql
 %{_datadir}/postgresql/sql_features.txt
 
-%{_datadir}/postgresql/contrib/
+%{_datadir}/postgresql/extension/
 %{_datadir}/postgresql/postgres.shdescription
 %{_datadir}/postgresql/timezonesets
 %{_datadir}/postgresql/tsearch_data
@@ -608,6 +611,7 @@ exit 1
 %defattr(-,root,root)
 # %doc doc/TODO doc/TODO.detail
 %{_includedir}/*
+%{_bindir}/pg_test_fsync
 %{_bindir}/ecpg
 %{_libdir}/lib*.a
 %{_libdir}/lib*.so
@@ -625,7 +629,7 @@ exit 1
 
 %files plpython
 %defattr(-,root,root) 
-%{_libdir}/postgresql/plpython.so 
+%{_libdir}/postgresql/plpython2.so
 
 %files plperl
 %defattr(-,root,root) 
