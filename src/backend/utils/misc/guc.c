@@ -4367,8 +4367,9 @@ AtStart_GUC(void)
 
 /*
  * Enter a new nesting level for GUC values.  This is called at subtransaction
- * start and when entering a function that has proconfig settings.	NOTE that
- * we must not risk error here, else subtransaction start will be unhappy.
+ * start, and when entering a function that has proconfig settings, and in
+ * some other places where we want to set GUC variables transiently.
+ * NOTE we must not risk error here, else subtransaction start will be unhappy.
  */
 int
 NewGUCNestLevel(void)
@@ -4378,8 +4379,9 @@ NewGUCNestLevel(void)
 
 /*
  * Do GUC processing at transaction or subtransaction commit or abort, or
- * when exiting a function that has proconfig settings.  (The name is thus
- * a bit of a misnomer; perhaps it should be ExitGUCNestLevel or some such.)
+ * when exiting a function that has proconfig settings, or when undoing a
+ * transient assignment to some GUC variables.  (The name is thus a bit of
+ * a misnomer; perhaps it should be ExitGUCNestLevel or some such.)
  * During abort, we discard all GUC settings that were applied at nesting
  * levels >= nestLevel.  nestLevel == 1 corresponds to the main transaction.
  */
@@ -4412,11 +4414,11 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 		GucStack   *stack;
 
 		/*
-		 * Process and pop each stack entry within the nest level.	To
-		 * simplify fmgr_security_definer(), we allow failure exit from a
-		 * function-with-SET-options to be recovered at the surrounding
-		 * transaction or subtransaction abort; so there could be more than
-		 * one stack entry to pop.
+		 * Process and pop each stack entry within the nest level. To simplify
+		 * fmgr_security_definer() and other places that use GUC_ACTION_SAVE,
+		 * we allow failure exit from code that uses a local nest level to be
+		 * recovered at the surrounding transaction or subtransaction abort;
+		 * so there could be more than one stack entry to pop.
 		 */
 		while ((stack = gconf->stack) != NULL &&
 			   stack->nest_level >= nestLevel)
@@ -7337,6 +7339,8 @@ _ShowOption(struct config_generic * record, bool use_units)
  *
  *		variable name, string, null terminated
  *		variable value, string, null terminated
+ *		variable sourcefile, string, null terminated (empty if none)
+ *		variable sourceline, integer
  *		variable source, integer
  */
 static void
@@ -7373,8 +7377,7 @@ write_one_nondefault_variable(FILE *fp, struct config_generic * gconf)
 			{
 				struct config_real *conf = (struct config_real *) gconf;
 
-				/* Could lose precision here? */
-				fprintf(fp, "%f", *conf->variable);
+				fprintf(fp, "%.17g", *conf->variable);
 			}
 			break;
 
@@ -7398,7 +7401,12 @@ write_one_nondefault_variable(FILE *fp, struct config_generic * gconf)
 
 	fputc(0, fp);
 
-	fwrite(&gconf->source, sizeof(gconf->source), 1, fp);
+	if (gconf->sourcefile)
+		fprintf(fp, "%s", gconf->sourcefile);
+	fputc(0, fp);
+
+	fwrite(&gconf->sourceline, 1, sizeof(gconf->sourceline), fp);
+	fwrite(&gconf->source, 1, sizeof(gconf->source), fp);
 }
 
 void
@@ -7501,8 +7509,10 @@ read_nondefault_variables(void)
 {
 	FILE	   *fp;
 	char	   *varname,
-			   *varvalue;
-	int			varsource;
+			   *varvalue,
+			   *varsourcefile;
+	int			varsourceline;
+	GucSource	varsource;
 
 	/*
 	 * Open file
@@ -7527,16 +7537,26 @@ read_nondefault_variables(void)
 			break;
 
 		if ((record = find_option(varname, true, FATAL)) == NULL)
-			elog(FATAL, "failed to locate variable %s in exec config params file", varname);
+			elog(FATAL, "failed to locate variable \"%s\" in exec config params file", varname);
+
 		if ((varvalue = read_string_with_null(fp)) == NULL)
 			elog(FATAL, "invalid format of exec config params file");
-		if (fread(&varsource, sizeof(varsource), 1, fp) == 0)
+		if ((varsourcefile = read_string_with_null(fp)) == NULL)
+			elog(FATAL, "invalid format of exec config params file");
+		if (fread(&varsourceline, 1, sizeof(varsourceline), fp) != sizeof(varsourceline))
+			elog(FATAL, "invalid format of exec config params file");
+		if (fread(&varsource, 1, sizeof(varsource), fp) != sizeof(varsource))
 			elog(FATAL, "invalid format of exec config params file");
 
-		(void) set_config_option(varname, varvalue, record->context,
-								 varsource, GUC_ACTION_SET, true);
+		(void) set_config_option(varname, varvalue,
+								 record->context, varsource,
+								 GUC_ACTION_SET, true);
+		if (varsourcefile[0])
+			set_config_sourcefile(varname, varsourcefile, varsourceline);
+
 		free(varname);
 		free(varvalue);
+		free(varsourcefile);
 	}
 
 	FreeFile(fp);
