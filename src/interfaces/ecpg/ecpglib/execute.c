@@ -1676,7 +1676,7 @@ ecpg_execute(struct statement * stmt)
 					if (PQresultStatus(results) == PGRES_COMMAND_OK)
 						ecpg_log("ecpg_execute on line %d: got PGRES_COMMAND_OK after PGRES_COPY_OUT\n", stmt->lineno);
 					else
-						ecpg_log("ecpg_execute on line %d: got error after PGRES_COPY_OUT: %s", PQresultErrorMessage(results));
+						ecpg_log("ecpg_execute on line %d: got error after PGRES_COPY_OUT: %s", stmt->lineno, PQresultErrorMessage(results));
 				}
 				break;
 			}
@@ -1774,7 +1774,12 @@ ECPGdo(const int lineno, const int compat, const int force_indicator, const char
 	if (statement_type == ECPGst_prepnormal)
 	{
 		if (!ecpg_auto_prepare(lineno, connection_name, compat, &prepname, query))
+		{
+			setlocale(LC_NUMERIC, oldlocale);
+			ecpg_free(oldlocale);
+			va_end(args);
 			return (false);
+		}
 
 		/*
 		 * statement is now prepared, so instead of the query we have to
@@ -1801,6 +1806,9 @@ ECPGdo(const int lineno, const int compat, const int force_indicator, const char
 		else
 		{
 			ecpg_raise(lineno, ECPG_INVALID_STMT, ECPG_SQLSTATE_INVALID_SQL_STATEMENT_NAME, stmt->command);
+			setlocale(LC_NUMERIC, oldlocale);
+			ecpg_free(oldlocale);
+			va_end(args);
 			return (false);
 		}
 	}
