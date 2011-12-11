@@ -6384,10 +6384,12 @@ StartupXLOG(void)
 				oldestActiveXID = checkPoint.oldestActiveXid;
 			Assert(TransactionIdIsValid(oldestActiveXID));
 
-			/* Startup commit log and related stuff */
+			/*
+			 * Startup commit log and subtrans only. Other SLRUs are not
+			 * maintained during recovery and need not be started yet.
+			 */
 			StartupCLOG();
 			StartupSUBTRANS(oldestActiveXID);
-			StartupMultiXact();
 
 			/*
 			 * If we're beginning at a shutdown checkpoint, we know that
@@ -6876,15 +6878,20 @@ StartupXLOG(void)
 	TransactionIdRetreat(ShmemVariableCache->latestCompletedXid);
 
 	/*
-	 * Start up the commit log and related stuff, too. In hot standby mode we
-	 * did this already before WAL replay.
+	 * Start up the commit log and subtrans, if not already done for
+	 * hot standby.
 	 */
 	if (standbyState == STANDBY_DISABLED)
 	{
 		StartupCLOG();
 		StartupSUBTRANS(oldestActiveXID);
-		StartupMultiXact();
 	}
+
+	/*
+	 * Perform end of recovery actions for any SLRUs that need it.
+	 */
+	StartupMultiXact();
+	TrimCLOG();
 
 	/* Reload shared-memory state for prepared transactions */
 	RecoverPreparedTransactions();
@@ -7592,6 +7599,16 @@ CreateCheckPoint(int flags)
 	checkPoint.time = (pg_time_t) time(NULL);
 
 	/*
+	 * For Hot Standby, derive the oldestActiveXid before we fix the redo pointer.
+	 * This allows us to begin accumulating changes to assemble our starting
+	 * snapshot of locks and transactions.
+	 */
+	if (!shutdown && XLogStandbyInfoActive())
+		checkPoint.oldestActiveXid = GetOldestActiveTransactionId();
+	else
+		checkPoint.oldestActiveXid = InvalidTransactionId;
+
+	/*
 	 * We must hold WALInsertLock while examining insert state to determine
 	 * the checkpoint REDO pointer.
 	 */
@@ -7777,9 +7794,7 @@ CreateCheckPoint(int flags)
 	 * Update checkPoint.nextXid since we have a later value
 	 */
 	if (!shutdown && XLogStandbyInfoActive())
-		LogStandbySnapshot(&checkPoint.oldestActiveXid, &checkPoint.nextXid);
-	else
-		checkPoint.oldestActiveXid = InvalidTransactionId;
+		LogStandbySnapshot(&checkPoint.nextXid);
 
 	START_CRIT_SECTION();
 

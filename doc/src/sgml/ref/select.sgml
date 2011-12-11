@@ -1063,7 +1063,8 @@ SELECT name FROM distributors ORDER BY code;
 <synopsis>
 LIMIT { <replaceable class="parameter">count</replaceable> | ALL }
 OFFSET <replaceable class="parameter">start</replaceable>
-</synopsis><replaceable class="parameter">count</replaceable> specifies the
+</synopsis>
+    <replaceable class="parameter">count</replaceable> specifies the
     maximum number of rows to return, while <replaceable
     class="parameter">start</replaceable> specifies the number of rows
     to skip before starting to return rows.  When both are specified,
@@ -1086,17 +1087,19 @@ OFFSET <replaceable class="parameter">start</replaceable>
 OFFSET <replaceable class="parameter">start</replaceable> { ROW | ROWS }
 FETCH { FIRST | NEXT } [ <replaceable class="parameter">count</replaceable> ] { ROW | ROWS } ONLY
 </synopsis>
-    According to the standard, the <literal>OFFSET</literal> clause must come
-    before the <literal>FETCH</literal> clause if both are present; but
-    <productname>PostgreSQL</> is laxer and allows either order.
+    In this syntax, to write anything except a simple integer constant for
+    <replaceable class="parameter">start</> or <replaceable
+    class="parameter">count</replaceable>, you must write parentheses
+    around it.
+    If <replaceable class="parameter">count</> is
+    omitted in a <literal>FETCH</> clause, it defaults to 1.
     <literal>ROW</literal>
     and <literal>ROWS</literal> as well as <literal>FIRST</literal>
     and <literal>NEXT</literal> are noise words that don't influence
-    the effects of these clauses.  In this syntax, when using expressions
-    other than simple constants for <replaceable class="parameter">start</>
-    or <replaceable class="parameter">count</replaceable>, parentheses will be
-    necessary in most cases.  If <replaceable class="parameter">count</> is
-    omitted in <literal>FETCH</>, it defaults to 1.
+    the effects of these clauses.
+    According to the standard, the <literal>OFFSET</literal> clause must come
+    before the <literal>FETCH</literal> clause if both are present; but
+    <productname>PostgreSQL</> is laxer and allows either order.
    </para>
 
    <para>
@@ -1280,7 +1283,8 @@ ROLLBACK TO s;
 
   <caution>
    <para>
-    It is possible for a <command>SELECT</> command using <literal>ORDER
+    It is possible for a <command>SELECT</> command running at the <literal>READ
+    COMMITTED</literal> transaction isolation level and using <literal>ORDER
     BY</literal> and <literal>FOR UPDATE/SHARE</literal> to return rows out of
     order.  This is because <literal>ORDER BY</> is applied first.
     The command sorts the result, but might then block trying to obtain a lock
@@ -1300,6 +1304,13 @@ SELECT * FROM (SELECT * FROM mytable FOR UPDATE) ss ORDER BY column1;
     <literal>LIMIT</> or other restrictions.  So this technique is recommended
     only if concurrent updates of the ordering columns are expected and a
     strictly sorted result is required.
+   </para>
+
+   <para>
+    At the <literal>REPEATABLE READ</literal> or <literal>SERIALIZABLE</literal>
+    transaction isolation level this would cause a serialization failure (with
+    a <literal>SQLSTATE</literal> of <literal>'40001'</literal>), so there is
+    no possibility of receiving rows out of order under these isolation levels.
    </para>
   </caution>
   </refsect2>
