@@ -554,7 +554,13 @@ static TimeLineID lastPageTLI = 0;
 static XLogRecPtr minRecoveryPoint;		/* local copy of
 										 * ControlFile->minRecoveryPoint */
 static bool updateMinRecoveryPoint = true;
-static bool reachedMinRecoveryPoint = false;
+
+/*
+ * Have we reached a consistent database state? In crash recovery, we have
+ * to replay all the WAL, so reachedConsistency is never set. During archive
+ * recovery, the database is consistent once minRecoveryPoint is reached.
+ */
+static bool reachedConsistency = false;
 
 static bool InRedo = false;
 
@@ -3602,9 +3608,9 @@ RestoreBkpBlocks(XLogRecPtr lsn, XLogRecord *record, bool cleanup)
 		}
 		else
 		{
-			/* must zero-fill the hole */
-			MemSet((char *) page, 0, BLCKSZ);
 			memcpy((char *) page, blk, bkpb.hole_offset);
+			/* must zero-fill the hole */
+			MemSet((char *) page + bkpb.hole_offset, 0, bkpb.hole_length);
 			memcpy((char *) page + (bkpb.hole_offset + bkpb.hole_length),
 				   blk + bkpb.hole_offset,
 				   BLCKSZ - (bkpb.hole_offset + bkpb.hole_length));
@@ -6445,7 +6451,7 @@ StartupXLOG(void)
 		 */
 		SpinLockAcquire(&xlogctl->info_lck);
 		xlogctl->replayEndRecPtr = ReadRecPtr;
-		xlogctl->recoveryLastRecPtr = ReadRecPtr;
+		xlogctl->recoveryLastRecPtr = EndRecPtr;
 		xlogctl->recoveryLastXTime = 0;
 		xlogctl->recoveryPause = false;
 		SpinLockRelease(&xlogctl->info_lck);
@@ -6953,13 +6959,20 @@ static void
 CheckRecoveryConsistency(void)
 {
 	/*
+	 * During crash recovery, we don't reach a consistent state until we've
+	 * replayed all the WAL.
+	 */
+	if (XLogRecPtrIsInvalid(minRecoveryPoint))
+		return;
+
+	/*
 	 * Have we passed our safe starting point?
 	 */
-	if (!reachedMinRecoveryPoint &&
+	if (!reachedConsistency &&
 		XLByteLE(minRecoveryPoint, EndRecPtr) &&
 		XLogRecPtrIsInvalid(ControlFile->backupStartPoint))
 	{
-		reachedMinRecoveryPoint = true;
+		reachedConsistency = true;
 		ereport(LOG,
 				(errmsg("consistent recovery state reached at %X/%X",
 						EndRecPtr.xlogid, EndRecPtr.xrecoff)));
@@ -6972,7 +6985,7 @@ CheckRecoveryConsistency(void)
 	 */
 	if (standbyState == STANDBY_SNAPSHOT_READY &&
 		!LocalHotStandbyActive &&
-		reachedMinRecoveryPoint &&
+		reachedConsistency &&
 		IsUnderPostmaster)
 	{
 		/* use volatile pointer to prevent code rearrangement */
@@ -8374,12 +8387,15 @@ xlog_redo(XLogRecPtr lsn, XLogRecord *record)
 	{
 		Oid			nextOid;
 
+		/*
+		 * We used to try to take the maximum of ShmemVariableCache->nextOid
+		 * and the recorded nextOid, but that fails if the OID counter wraps
+		 * around.  Since no OID allocation should be happening during replay
+		 * anyway, better to just believe the record exactly.
+		 */
 		memcpy(&nextOid, XLogRecGetData(record), sizeof(Oid));
-		if (ShmemVariableCache->nextOid < nextOid)
-		{
-			ShmemVariableCache->nextOid = nextOid;
-			ShmemVariableCache->oidCount = 0;
-		}
+		ShmemVariableCache->nextOid = nextOid;
+		ShmemVariableCache->oidCount = 0;
 	}
 	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
 	{
@@ -8467,15 +8483,13 @@ xlog_redo(XLogRecPtr lsn, XLogRecord *record)
 		CheckPoint	checkPoint;
 
 		memcpy(&checkPoint, XLogRecGetData(record), sizeof(CheckPoint));
-		/* In an ONLINE checkpoint, treat the counters like NEXTOID */
+		/* In an ONLINE checkpoint, treat the XID counter as a minimum */
 		if (TransactionIdPrecedes(ShmemVariableCache->nextXid,
 								  checkPoint.nextXid))
 			ShmemVariableCache->nextXid = checkPoint.nextXid;
-		if (ShmemVariableCache->nextOid < checkPoint.nextOid)
-		{
-			ShmemVariableCache->nextOid = checkPoint.nextOid;
-			ShmemVariableCache->oidCount = 0;
-		}
+		/* ... but still treat OID counter as exact */
+		ShmemVariableCache->nextOid = checkPoint.nextOid;
+		ShmemVariableCache->oidCount = 0;
 		MultiXactAdvanceNextMXact(checkPoint.nextMulti,
 								  checkPoint.nextMultiOffset);
 		if (TransactionIdPrecedes(ShmemVariableCache->oldestXid,

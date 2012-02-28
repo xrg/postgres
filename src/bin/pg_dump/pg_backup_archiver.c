@@ -97,6 +97,7 @@ static ArchiveHandle *_allocAH(const char *FileSpec, const ArchiveFormat fmt,
 static void _getObjectDescription(PQExpBuffer buf, TocEntry *te,
 					  ArchiveHandle *AH);
 static void _printTocEntry(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt, bool isData, bool acl_pass);
+static char *replace_line_endings(const char *str);
 
 
 static void _doSetFixedOutputState(ArchiveHandle *AH);
@@ -617,20 +618,20 @@ restore_toc_entry(ArchiveHandle *AH, TocEntry *te,
 					if (te->copyStmt && strlen(te->copyStmt) > 0)
 					{
 						ahprintf(AH, "%s", te->copyStmt);
-						AH->writingCopyData = true;
+						AH->outputKind = OUTPUT_COPYDATA;
 					}
+					else
+						AH->outputKind = OUTPUT_OTHERDATA;
 
 					(*AH->PrintTocDataPtr) (AH, te, ropt);
 
 					/*
 					 * Terminate COPY if needed.
 					 */
-					if (AH->writingCopyData)
-					{
-						if (RestoringToDB(AH))
-							EndDBCopyMode(AH, te);
-						AH->writingCopyData = false;
-					}
+					if (AH->outputKind == OUTPUT_COPYDATA &&
+						RestoringToDB(AH))
+						EndDBCopyMode(AH, te);
+					AH->outputKind = OUTPUT_SQLCMDS;
 
 					/* close out the transaction started above */
 					if (is_parallel && te->created)
@@ -2006,6 +2007,8 @@ _allocAH(const char *FileSpec, const ArchiveFormat fmt,
 	AH->mode = mode;
 	AH->compression = compression;
 
+	memset(&(AH->sqlparse), 0, sizeof(AH->sqlparse));
+
 	/* Open stdout with no compression for AH output handle */
 	AH->gzOut = 0;
 	AH->OF = stdout;
@@ -2937,6 +2940,9 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt, bool isDat
 	if (!AH->noTocComments)
 	{
 		const char *pfx;
+		char	   *sanitized_name;
+		char	   *sanitized_schema;
+		char	   *sanitized_owner;
 
 		if (isData)
 			pfx = "Data for ";
@@ -2958,12 +2964,39 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt, bool isDat
 				ahprintf(AH, "\n");
 			}
 		}
+
+		/*
+		 * Zap any line endings embedded in user-supplied fields, to prevent
+		 * corruption of the dump (which could, in the worst case, present an
+		 * SQL injection vulnerability if someone were to incautiously load a
+		 * dump containing objects with maliciously crafted names).
+		 */
+		sanitized_name = replace_line_endings(te->tag);
+		if (te->namespace)
+			sanitized_schema = replace_line_endings(te->namespace);
+		else
+			sanitized_schema = strdup("-");
+		if (!ropt->noOwner)
+			sanitized_owner = replace_line_endings(te->owner);
+		else
+			sanitized_owner = strdup("-");
+
 		ahprintf(AH, "-- %sName: %s; Type: %s; Schema: %s; Owner: %s",
-				 pfx, te->tag, te->desc,
-				 te->namespace ? te->namespace : "-",
-				 ropt->noOwner ? "-" : te->owner);
+				 pfx, sanitized_name, te->desc, sanitized_schema,
+				 sanitized_owner);
+
+		free(sanitized_name);
+		free(sanitized_schema);
+		free(sanitized_owner);
+
 		if (te->tablespace && !ropt->noTablespace)
-			ahprintf(AH, "; Tablespace: %s", te->tablespace);
+		{
+			char   *sanitized_tablespace;
+
+			sanitized_tablespace = replace_line_endings(te->tablespace);
+			ahprintf(AH, "; Tablespace: %s", sanitized_tablespace);
+			free(sanitized_tablespace);
+		}
 		ahprintf(AH, "\n");
 
 		if (AH->PrintExtraTocPtr !=NULL)
@@ -3056,6 +3089,27 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt, bool isDat
 			free(AH->currUser);
 		AH->currUser = NULL;
 	}
+}
+
+/*
+ * Sanitize a string to be included in an SQL comment, by replacing any
+ * newlines with spaces.
+ */
+static char *
+replace_line_endings(const char *str)
+{
+	char   *result;
+	char   *s;
+
+	result = strdup(str);
+
+	for (s = result; *s != '\0'; s++)
+	{
+		if (*s == '\n' || *s == '\r')
+			*s = ' ';
+	}
+
+	return result;
 }
 
 void
@@ -4209,7 +4263,8 @@ CloneArchive(ArchiveHandle *AH)
 		die_horribly(AH, modulename, "out of memory\n");
 	memcpy(clone, AH, sizeof(ArchiveHandle));
 
-	/* Handle format-independent fields ... none at the moment */
+	/* Handle format-independent fields */
+	memset(&(clone->sqlparse), 0, sizeof(clone->sqlparse));
 
 	/* The clone will have its own connection, so disregard connection state */
 	clone->connection = NULL;
@@ -4242,7 +4297,9 @@ DeCloneArchive(ArchiveHandle *AH)
 	/* Clear format-specific state */
 	(AH->DeClonePtr) (AH);
 
-	/* Clear state allocated by CloneArchive ... none at the moment */
+	/* Clear state allocated by CloneArchive */
+	if (AH->sqlparse.curCmd)
+		destroyPQExpBuffer(AH->sqlparse.curCmd);
 
 	/* Clear any connection-local state */
 	if (AH->currUser)
