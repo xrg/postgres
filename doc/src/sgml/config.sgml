@@ -2622,8 +2622,7 @@ SET ENABLE_SEQSCAN TO OFF;
       planning using heuristic searching.  This reduces planning time for
       complex queries (those joining many relations), at the cost of producing
       plans that are sometimes inferior to those found by the normal
-      exhaustive-search algorithm.  Also, GEQO's searching is randomized and
-      therefore its plans may vary nondeterministically.
+      exhaustive-search algorithm.
       For more information see <xref linkend="geqo">.
      </para>
 
@@ -2662,9 +2661,11 @@ SET ENABLE_SEQSCAN TO OFF;
         this many <literal>FROM</> items involved. (Note that a
         <literal>FULL OUTER JOIN</> construct counts as only one <literal>FROM</>
         item.) The default is 12. For simpler queries it is usually best
-        to use the deterministic, exhaustive planner, but for queries with
-        many tables the deterministic planner takes too long, often
-        longer than the penalty of executing a suboptimal plan.
+        to use the regular, exhaustive-search planner, but for queries with
+        many tables the exhaustive search takes too long, often
+        longer than the penalty of executing a suboptimal plan.  Thus,
+        a threshold on the size of the query is a convenient way to manage
+        use of GEQO.
        </para>
       </listitem>
      </varlistentry>
@@ -2876,7 +2877,7 @@ SELECT * FROM parent WHERE key = 2400;
 
        <para>
         Setting this value to <xref linkend="guc-geqo-threshold"> or more
-        may trigger use of the GEQO planner, resulting in nondeterministic
+        may trigger use of the GEQO planner, resulting in non-optimal
         plans.  See <xref linkend="runtime-config-query-geqo">.
        </para>
       </listitem>
@@ -2911,7 +2912,7 @@ SELECT * FROM parent WHERE key = 2400;
 
        <para>
         Setting this value to <xref linkend="guc-geqo-threshold"> or more
-        may trigger use of the GEQO planner, resulting in nondeterministic
+        may trigger use of the GEQO planner, resulting in non-optimal
         plans.  See <xref linkend="runtime-config-query-geqo">.
        </para>
       </listitem>
@@ -2961,7 +2962,7 @@ SELECT * FROM parent WHERE key = 2400;
         value</> (<acronym>CSV</>) format, which is convenient for
         loading logs into programs.
         See <xref linkend="runtime-config-logging-csvlog"> for details.
-        <varname>logging_collector</varname> must be enabled to generate
+        <xref linkend="guc-logging-collector"> must be enabled to generate
         CSV-format log output.
        </para>
 
@@ -2993,24 +2994,39 @@ local0.*    /var/log/postgresql
       </indexterm>
       <listitem>
        <para>
-         This parameter captures plain and CSV-format log messages
-         sent to <application>stderr</> and redirects them into log files.
+         This parameter enables the <firstterm>logging collector</>, which
+         is a background process that captures log messages
+         sent to <systemitem>stderr</> and redirects them into log files.
          This approach is often more useful than
          logging to <application>syslog</>, since some types of messages
-         might not appear in <application>syslog</> output (a common example
-         is dynamic-linker failure messages).
+         might not appear in <application>syslog</> output.  (One common
+         example is dynamic-linker failure messages; another is error messages
+         produced by scripts such as <varname>archive_command</>.)
          This parameter can only be set at server start.
        </para>
 
        <note>
         <para>
+         It is possible to log to <systemitem>stderr</> without using the
+         logging collector; the log messages will just go to wherever the
+         server's <systemitem>stderr</> is directed.  However, that method is
+         only suitable for low log volumes, since it provides no convenient
+         way to rotate log files.  Also, on some platforms not using the
+         logging collector can result in lost or garbled log output, because
+         multiple processes writing concurrently to the same log file can
+         overwrite each other's output.
+        </para>
+       </note>
+
+       <note>
+        <para>
           The logging collector is designed to never lose messages.  This means
           that in case of extremely high load, server processes could be
-          blocked due to trying to send additional log messages when the
+          blocked while trying to send additional log messages when the
           collector has fallen behind.  In contrast, <application>syslog</>
-          prefers to drop messages if it cannot write them, which means it's
-          less reliable in those cases but it will not block the rest of the
-          system.
+          prefers to drop messages if it cannot write them, which means it
+          may fail to log some messages in such cases but it will not block
+          the rest of the system.
         </para>
        </note>
 

@@ -785,15 +785,22 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	parse->havingQual = pullup_replace_vars(parse->havingQual, &rvcontext);
 
 	/*
-	 * Replace references in the translated_vars lists of appendrels, too.
-	 * We do it this way because we must preserve the AppendRelInfo structs.
+	 * Replace references in the translated_vars lists of appendrels. When
+	 * pulling up an appendrel member, we do not need PHVs in the list of the
+	 * parent appendrel --- there isn't any outer join between. Elsewhere, use
+	 * PHVs for safety.  (This analysis could be made tighter but it seems
+	 * unlikely to be worth much trouble.)
 	 */
 	foreach(lc, root->append_rel_list)
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) lfirst(lc);
+		bool		save_need_phvs = rvcontext.need_phvs;
 
+		if (appinfo == containing_appendrel)
+			rvcontext.need_phvs = false;
 		appinfo->translated_vars = (List *)
 			pullup_replace_vars((Node *) appinfo->translated_vars, &rvcontext);
+		rvcontext.need_phvs = save_need_phvs;
 	}
 
 	/*
@@ -1401,31 +1408,14 @@ pullup_replace_vars_callback(Var *var,
 			if (newnode && IsA(newnode, Var) &&
 				((Var *) newnode)->varlevelsup == 0)
 			{
-				/*
-				 * Simple Vars normally escape being wrapped.  However, in
-				 * wrap_non_vars mode (ie, we are dealing with an appendrel
-				 * member), we must ensure that each tlist entry expands to a
-				 * distinct expression, else we may have problems with
-				 * improperly placing identical entries into different
-				 * EquivalenceClasses.  Therefore, we wrap a Var in a
-				 * PlaceHolderVar if it duplicates any earlier entry in the
-				 * tlist (ie, we've got "SELECT x, x, ...").  Since each PHV
-				 * is distinct, this fixes the ambiguity.  We can use
-				 * tlist_member to detect whether there's an earlier
-				 * duplicate.
-				 */
-				wrap = (rcon->wrap_non_vars &&
-						tlist_member(newnode, rcon->targetlist) != tle);
+				/* Simple Vars always escape being wrapped */
+				wrap = false;
 			}
 			else if (newnode && IsA(newnode, PlaceHolderVar) &&
 					 ((PlaceHolderVar *) newnode)->phlevelsup == 0)
 			{
-				/*
-				 * No need to directly wrap a PlaceHolderVar with another one,
-				 * either, unless we need to prevent duplication.
-				 */
-				wrap = (rcon->wrap_non_vars &&
-						tlist_member(newnode, rcon->targetlist) != tle);
+				/* No need to wrap a PlaceHolderVar with another one, either */
+				wrap = false;
 			}
 			else if (rcon->wrap_non_vars)
 			{
@@ -1994,8 +1984,6 @@ reduce_outer_joins_pass2(Node *jtnode,
  *
  * Find any PlaceHolderVar nodes in the given tree that reference the
  * pulled-up relid, and change them to reference the replacement relid(s).
- * We do not need to recurse into subqueries, since no subquery of the current
- * top query could (yet) contain such a reference.
  *
  * NOTE: although this has the form of a walker, we cheat and modify the
  * nodes in-place.	This should be OK since the tree was copied by
@@ -2006,6 +1994,7 @@ reduce_outer_joins_pass2(Node *jtnode,
 typedef struct
 {
 	int			varno;
+	int			sublevels_up;
 	Relids		subrelids;
 } substitute_multiple_relids_context;
 
@@ -2019,7 +2008,8 @@ substitute_multiple_relids_walker(Node *node,
 	{
 		PlaceHolderVar *phv = (PlaceHolderVar *) node;
 
-		if (bms_is_member(context->varno, phv->phrels))
+		if (phv->phlevelsup == context->sublevels_up &&
+			bms_is_member(context->varno, phv->phrels))
 		{
 			phv->phrels = bms_union(phv->phrels,
 									context->subrelids);
@@ -2027,6 +2017,18 @@ substitute_multiple_relids_walker(Node *node,
 										 context->varno);
 		}
 		/* fall through to examine children */
+	}
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		bool		result;
+
+		context->sublevels_up++;
+		result = query_tree_walker((Query *) node,
+								   substitute_multiple_relids_walker,
+								   (void *) context, 0);
+		context->sublevels_up--;
+		return result;
 	}
 	/* Shouldn't need to handle planner auxiliary nodes here */
 	Assert(!IsA(node, SpecialJoinInfo));
@@ -2044,6 +2046,7 @@ substitute_multiple_relids(Node *node, int varno, Relids subrelids)
 	substitute_multiple_relids_context context;
 
 	context.varno = varno;
+	context.sublevels_up = 0;
 	context.subrelids = subrelids;
 
 	/*

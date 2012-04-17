@@ -3325,7 +3325,8 @@ InitTempTableNamespace(void)
 		 * temp tables.  This works because the places that access the temp
 		 * namespace for my own backend skip permissions checks on it.
 		 */
-		namespaceId = NamespaceCreate(namespaceName, BOOTSTRAP_SUPERUSERID);
+		namespaceId = NamespaceCreate(namespaceName, BOOTSTRAP_SUPERUSERID,
+									  true);
 		/* Advance command counter to make namespace visible */
 		CommandCounterIncrement();
 	}
@@ -3349,7 +3350,8 @@ InitTempTableNamespace(void)
 	toastspaceId = get_namespace_oid(namespaceName, true);
 	if (!OidIsValid(toastspaceId))
 	{
-		toastspaceId = NamespaceCreate(namespaceName, BOOTSTRAP_SUPERUSERID);
+		toastspaceId = NamespaceCreate(namespaceName, BOOTSTRAP_SUPERUSERID,
+									   true);
 		/* Advance command counter to make namespace visible */
 		CommandCounterIncrement();
 	}
@@ -3563,8 +3565,10 @@ check_search_path(char **newval, void **extra, GucSource source)
 	/*
 	 * If we aren't inside a transaction, we cannot do database access so
 	 * cannot verify the individual names.	Must accept the list on faith.
+	 * Also, if the value is coming from a noninteractive source, accept it
+	 * anyway.
 	 */
-	if (IsTransactionState())
+	if (IsTransactionState() && source >= PGC_S_INTERACTIVE)
 	{
 		/*
 		 * Verify that all the names are either valid namespace names or
