@@ -565,6 +565,7 @@ exit 1
 %{_bindir}/pg_controldata 
 %{_bindir}/pg_ctl
 %{_bindir}/pg_resetxlog
+%{_bindir}/pg_receivexlog
 %{_bindir}/postgres
 %{_bindir}/postmaster
 %{_bindir}/pg_standby
@@ -579,6 +580,13 @@ exit 1
 %{_mandir}/man1/pg_resetxlog.*
 %{_mandir}/man1/postgres.1*
 %{_mandir}/man1/postmaster.1*
+%{_mandir}/man1/oid2name.1.*
+%{_mandir}/man1/pg_archivecleanup.1.*
+%{_mandir}/man1/pg_receivexlog.1.*
+%{_mandir}/man1/pg_standby.1.*
+%{_mandir}/man1/pg_upgrade.1.*
+%{_mandir}/man1/pgbench.1.*
+%{_mandir}/man1/vacuumlo.1.*
 %dir %{_libdir}/postgresql
 %dir %{_datadir}/postgresql
 %attr(644,postgres,postgres) %config(noreplace) /var/lib/pgsql/.bashrc
@@ -612,6 +620,7 @@ exit 1
 # %doc doc/TODO doc/TODO.detail
 %{_includedir}/*
 %{_bindir}/pg_test_fsync
+%{_bindir}/pg_test_timing
 %{_bindir}/ecpg
 %{_libdir}/lib*.a
 %{_libdir}/lib*.so
@@ -619,6 +628,8 @@ exit 1
 %{_mandir}/man1/ecpg.1*
 %{_bindir}/pg_config
 %{_mandir}/man1/pg_config.1*
+%{_mandir}/man1/pg_test_fsync.1.*
+ %{_mandir}/man1/pg_test_timing.1.*
 #From %files -n %{libnamedevel}
 #{_libdir}/libpq.so
 #From %files -n %{libecpgdevel}
