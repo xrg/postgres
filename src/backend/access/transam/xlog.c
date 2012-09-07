@@ -2844,7 +2844,33 @@ XLogFileRead(uint32 log, uint32 seg, int emode, TimeLineID tli,
 		XLogFilePath(xlogfpath, tli, log, seg);
 		if (stat(xlogfpath, &statbuf) == 0)
 		{
-			if (unlink(xlogfpath) != 0)
+			char oldpath[MAXPGPATH];
+#ifdef WIN32
+			static unsigned int deletedcounter = 1;
+			/*
+			 * On Windows, if another process (e.g a walsender process) holds
+			 * the file open in FILE_SHARE_DELETE mode, unlink will succeed,
+			 * but the file will still show up in directory listing until the
+			 * last handle is closed, and we cannot rename the new file in its
+			 * place until that. To avoid that problem, rename the old file to
+			 * a temporary name first. Use a counter to create a unique
+			 * filename, because the same file might be restored from the
+			 * archive multiple times, and a walsender could still be holding
+			 * onto an old deleted version of it.
+			 */
+			snprintf(oldpath, MAXPGPATH, "%s.deleted%u",
+					 xlogfpath, deletedcounter++);
+			if (rename(xlogfpath, oldpath) != 0)
+			{
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not rename file \"%s\" to \"%s\": %m",
+								xlogfpath, oldpath)));
+			}
+#else
+			strncpy(oldpath, xlogfpath, MAXPGPATH);
+#endif
+			if (unlink(oldpath) != 0)
 				ereport(FATAL,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m",
@@ -5990,9 +6016,10 @@ GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream)
  */
 #define RecoveryRequiresIntParameter(param_name, currValue, minValue) \
 do { \
-	if (currValue < minValue) \
+	if ((currValue) < (minValue)) \
 		ereport(ERROR, \
-				(errmsg("hot standby is not possible because " \
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
+				 errmsg("hot standby is not possible because " \
 						"%s = %d is a lower setting than on the master server " \
 						"(its value was %d)", \
 						param_name, \
@@ -6033,10 +6060,10 @@ CheckRequiredParameterValues(void)
 		RecoveryRequiresIntParameter("max_connections",
 									 MaxConnections,
 									 ControlFile->MaxConnections);
-		RecoveryRequiresIntParameter("max_prepared_xacts",
+		RecoveryRequiresIntParameter("max_prepared_transactions",
 									 max_prepared_xacts,
 									 ControlFile->max_prepared_xacts);
-		RecoveryRequiresIntParameter("max_locks_per_xact",
+		RecoveryRequiresIntParameter("max_locks_per_transaction",
 									 max_locks_per_xact,
 									 ControlFile->max_locks_per_xact);
 	}
