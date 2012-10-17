@@ -213,6 +213,11 @@ INSERT <replaceable>oid</replaceable> <replaceable class="parameter">count</repl
    <literal>RETURNING</> list, computed over the row(s) inserted by the
    command.
   </para>
+  <para>
+   If multiple rows are inserted by an <literal>INSERT ... RETURNING</> commmand,
+   the order of the <literal>RETURNING</> rows is the same as that of the inputs
+   to the <command>INSERT</> command.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -264,6 +269,18 @@ INSERT INTO films DEFAULT VALUES;
 INSERT INTO films (code, title, did, date_prod, kind) VALUES
     ('B6717', 'Tampopo', 110, '1985-02-10', 'Comedy'),
     ('HG120', 'The Dinner Game', 140, DEFAULT, 'Comedy');
+</programlisting>
+  </para>
+
+  <para>
+   This example inserts multiple rows and returns the corresponding ids
+   at the same order:
+
+<programlisting>
+INSERT INTO films(code, title) VALUES
+    ('B6717', 'Tampopo'),
+    ('HG120', 'The Dinner Game')
+    RETURNING id, code;
 </programlisting>
   </para>
 

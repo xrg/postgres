@@ -80,4 +80,13 @@ select col1, col2, char_length(col3) from inserttest;
    30 |   50 |       10000
 (8 rows)
 
+--- RETURNING order
+insert into inserttest(col1, col2) values(50, 10), (60, 8), (70, 23) RETURNING col2;
+ col2 
+------
+   10
+    8
+   23
+(3 rows)
+
 drop table inserttest;

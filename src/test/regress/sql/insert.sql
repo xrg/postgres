@@ -35,4 +35,8 @@ insert into inserttest values(30, 50, repeat('x', 10000));
 
 select col1, col2, char_length(col3) from inserttest;
 
+--- RETURNING order
+
+insert into inserttest(col1, col2) values(50, 10), (60, 8), (70, 23) RETURNING col2;
+
 drop table inserttest;
