@@ -1018,10 +1018,14 @@ standard_ProcessUtility(Node *parsetree,
 			break;
 
 		case T_VacuumStmt:
-			/* we choose to allow this during "read only" transactions */
-			PreventCommandDuringRecovery("VACUUM");
-			vacuum((VacuumStmt *) parsetree, InvalidOid, true, NULL, false,
-				   isTopLevel);
+			{
+				VacuumStmt *stmt = (VacuumStmt *) parsetree;
+
+				/* we choose to allow this during "read only" transactions */
+				PreventCommandDuringRecovery((stmt->options & VACOPT_VACUUM) ?
+											 "VACUUM" : "ANALYZE");
+				vacuum(stmt, InvalidOid, true, NULL, false, isTopLevel);
+			}
 			break;
 
 		case T_ExplainStmt:
@@ -1361,16 +1365,11 @@ UtilityContainsQuery(Node *parsetree)
 			return qry;
 
 		case T_CreateTableAsStmt:
-			/* might or might not contain a Query ... */
 			qry = (Query *) ((CreateTableAsStmt *) parsetree)->query;
-			if (IsA(qry, Query))
-			{
-				/* Recursion currently can't be necessary here */
-				Assert(qry->commandType != CMD_UTILITY);
-				return qry;
-			}
-			Assert(IsA(qry, ExecuteStmt));
-			return NULL;
+			Assert(IsA(qry, Query));
+			if (qry->commandType == CMD_UTILITY)
+				return UtilityContainsQuery(qry->utilityStmt);
+			return qry;
 
 		default:
 			return NULL;

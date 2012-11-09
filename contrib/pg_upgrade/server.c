@@ -149,7 +149,7 @@ get_major_server_version(ClusterInfo *cluster)
 	snprintf(ver_filename, sizeof(ver_filename), "%s/PG_VERSION",
 			 cluster->pgdata);
 	if ((version_fd = fopen(ver_filename, "r")) == NULL)
-		return 0;
+		pg_log(PG_FATAL, "could not open version file: %s\n", ver_filename);
 
 	if (fscanf(version_fd, "%63s", cluster->major_version_str) == 0 ||
 		sscanf(cluster->major_version_str, "%d.%d", &integer_version,
@@ -208,13 +208,18 @@ start_postmaster(ClusterInfo *cluster)
 	 * maximum.  We assume all datfrozenxid and relfrozen values are less than
 	 * a gap of 2000000000 from the current xid counter, so autovacuum will
 	 * not touch them.
+	 *
+	 *	synchronous_commit=off improves object creation speed, and we only
+	 *	modify the new cluster, so only use it there.  If there is a crash,
+	 *	the new cluster has to be recreated anyway.
 	 */
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s/pg_ctl\" -w -l \"%s\" -D \"%s\" -o \"-p %d %s %s%s\" start",
+			 "\"%s/pg_ctl\" -w -l \"%s\" -D \"%s\" -o \"-p %d%s%s%s%s\" start",
 		  cluster->bindir, SERVER_LOG_FILE, cluster->pgconfig, cluster->port,
 			 (cluster->controldata.cat_ver >=
-			  BINARY_UPGRADE_SERVER_FLAG_CAT_VER) ? "-b" :
-			 "-c autovacuum=off -c autovacuum_freeze_max_age=2000000000",
+			  BINARY_UPGRADE_SERVER_FLAG_CAT_VER) ? " -b" :
+			 " -c autovacuum=off -c autovacuum_freeze_max_age=2000000000",
+			 (cluster == &new_cluster) ? " -c synchronous_commit=off" : "",
 			 cluster->pgopts ? cluster->pgopts : "", socket_string);
 
 	/*

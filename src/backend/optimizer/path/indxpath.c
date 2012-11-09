@@ -85,13 +85,26 @@ static void consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 							IndexClauseSet *jclauseset,
 							IndexClauseSet *eclauseset,
 							List **bitindexpaths);
-static void expand_eclass_clause_combinations(PlannerInfo *root,
-								  RelOptInfo *rel,
-								  IndexOptInfo *index,
-								  int thiscol, int lastcol,
-								  IndexClauseSet *clauseset,
-								  IndexClauseSet *eclauseset,
-								  List **bitindexpaths);
+static void consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
+							   IndexOptInfo *index,
+							   IndexClauseSet *rclauseset,
+							   IndexClauseSet *jclauseset,
+							   IndexClauseSet *eclauseset,
+							   List **bitindexpaths,
+							   List *indexjoinclauses,
+							   int considered_clauses,
+							   List **considered_relids);
+static void get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
+					 IndexOptInfo *index,
+					 IndexClauseSet *rclauseset,
+					 IndexClauseSet *jclauseset,
+					 IndexClauseSet *eclauseset,
+					 List **bitindexpaths,
+					 Relids relids,
+					 List **considered_relids);
+static bool eclass_already_used(EquivalenceClass *parent_ec, Relids oldrelids,
+					List *indexjoinclauses);
+static bool bms_equal_any(Relids relids, List *relids_list);
 static void get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				IndexOptInfo *index, IndexClauseSet *clauses,
 				List **bitindexpaths);
@@ -247,7 +260,7 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		/*
 		 * Identify the join clauses that can match the index.	For the moment
 		 * we keep them separate from the restriction clauses.	Note that this
-		 * finds only "loose" join clauses that have not been merged into
+		 * step finds only "loose" join clauses that have not been merged into
 		 * EquivalenceClasses.	Also, collect join OR clauses for later.
 		 */
 		MemSet(&jclauseset, 0, sizeof(jclauseset));
@@ -262,8 +275,8 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		match_eclass_clauses_to_index(root, index, &eclauseset);
 
 		/*
-		 * If we found any plain or eclass join clauses, decide what to do
-		 * with 'em.
+		 * If we found any plain or eclass join clauses, build parameterized
+		 * index paths using them.
 		 */
 		if (jclauseset.nonempty || eclauseset.nonempty)
 			consider_index_join_clauses(root, rel, index,
@@ -314,7 +327,9 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	 * is to generate one such path for each distinct parameterization seen
 	 * among the available bitmap index paths.	This may look pretty
 	 * expensive, but usually there won't be very many distinct
-	 * parameterizations.
+	 * parameterizations.  (This logic is quite similar to that in
+	 * consider_index_join_clauses, but we're working with whole paths not
+	 * individual clauses.)
 	 */
 	if (bitjoinpaths != NIL)
 	{
@@ -332,28 +347,11 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		{
 			Path	   *path = (Path *) lfirst(lc);
 			Relids		required_outer;
-			bool		found = false;
-			ListCell   *lco;
 
 			required_outer = get_bitmap_tree_required_outer(path);
 			path_outer = lappend(path_outer, required_outer);
-
-			/* Have we already seen this param set? */
-			foreach(lco, all_path_outers)
-			{
-				Relids		existing_outers = (Relids) lfirst(lco);
-
-				if (bms_equal(existing_outers, required_outer))
-				{
-					found = true;
-					break;
-				}
-			}
-			if (!found)
-			{
-				/* No, so add it to all_path_outers */
+			if (!bms_equal_any(required_outer, all_path_outers))
 				all_path_outers = lappend(all_path_outers, required_outer);
-			}
 		}
 
 		/* Now, for each distinct parameterization set ... */
@@ -412,9 +410,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
  * 'jclauseset' is the collection of indexable simple join clauses
  * 'eclauseset' is the collection of indexable clauses from EquivalenceClasses
  * '*bitindexpaths' is the list to add bitmap paths to
- *
- * Note: this changes the clause lists contained in the passed clausesets,
- * but we don't care since the caller is done with them.
  */
 static void
 consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
@@ -424,156 +419,278 @@ consider_index_join_clauses(PlannerInfo *root, RelOptInfo *rel,
 							IndexClauseSet *eclauseset,
 							List **bitindexpaths)
 {
-	IndexClauseSet clauseset;
-	int			last_eclass_col;
+	int			considered_clauses = 0;
+	List	   *considered_relids = NIL;
 	int			indexcol;
 
 	/*
-	 * We can always include any restriction clauses in the index clauses.
-	 * However, it's not obvious which subsets of the join clauses are worth
-	 * generating paths from, and it's unlikely that considering every
-	 * possible subset is worth the cycles.  Our current heuristic is based on
-	 * the index columns, with the idea that later index columns are less
-	 * useful than earlier ones; therefore it's unlikely to be worth trying
-	 * combinations that would remove a clause from an earlier index column
-	 * while adding one to a later column.	Also, we know that all the eclass
-	 * clauses for a particular column are redundant, so we should use only
-	 * one of them.  However, eclass clauses will always represent equality
-	 * which is the strongest type of index constraint, so those are
-	 * high-value and we should try every available combination when we have
-	 * eclass clauses for more than one column.  Furthermore, it's unlikely to
-	 * be useful to combine an eclass clause with non-eclass clauses for the
-	 * same index column.  These considerations lead to the following
-	 * heuristics:
+	 * The strategy here is to identify every potentially useful set of outer
+	 * rels that can provide indexable join clauses.  For each such set,
+	 * select all the join clauses available from those outer rels, add on all
+	 * the indexable restriction clauses, and generate plain and/or bitmap
+	 * index paths for that set of clauses.  This is based on the assumption
+	 * that it's always better to apply a clause as an indexqual than as a
+	 * filter (qpqual); which is where an available clause would end up being
+	 * applied if we omit it from the indexquals.
 	 *
-	 * First, start with the restriction clauses, and add on all simple join
-	 * clauses for column 1.  If there are any such join clauses, generate
-	 * paths with this collection of clauses.  Then, if there are eclass
-	 * clauses for column 1, generate paths with each one of them replacing
-	 * any other clauses we have for column 1.
+	 * This looks expensive, but in most practical cases there won't be very
+	 * many distinct sets of outer rels to consider.  As a safety valve when
+	 * that's not true, we use a heuristic: limit the number of outer rel sets
+	 * considered to a multiple of the number of clauses considered.  (We'll
+	 * always consider using each individual join clause, though.)
 	 *
-	 * Next, add on all simple join clauses for column 2.  If there are any
-	 * such join clauses, generate paths with this collection.	If there are
-	 * eclass clauses for columns 1 or 2, generate paths with each such clause
-	 * replacing other clauses for its index column, including cases where we
-	 * use restriction or simple join clauses for one column and an eclass
-	 * clause for the other.
-	 *
-	 * Repeat for each additional index column.
+	 * For simplicity in selecting relevant clauses, we represent each set of
+	 * outer rels as a maximum set of clause_relids --- that is, the indexed
+	 * relation itself is also included in the relids set.  considered_relids
+	 * lists all relids sets we've already tried.
 	 */
-
-	/* Set up working set with just the restriction clauses */
-	memcpy(&clauseset, rclauseset, sizeof(clauseset));
-	/* Even if it's empty right now, it won't be by the time we use it */
-	clauseset.nonempty = true;
-
-	last_eclass_col = -1;
 	for (indexcol = 0; indexcol < index->ncolumns; indexcol++)
 	{
-		/*
-		 * If we don't have either simple join clauses or eclass clauses for
-		 * this column, no new paths can be created in this iteration.
-		 */
-		if (jclauseset->indexclauses[indexcol] == NIL &&
-			eclauseset->indexclauses[indexcol] == NIL)
-			continue;
-
-		/* Add any simple join clauses to the working set */
-		clauseset.indexclauses[indexcol] =
-			list_concat(clauseset.indexclauses[indexcol],
-						jclauseset->indexclauses[indexcol]);
-
-		/* Set recursion depth to reach last col with eclass clauses */
-		if (eclauseset->indexclauses[indexcol] != NIL)
-			last_eclass_col = indexcol;
-
-		/* Do we have eclass clauses for any column now under consideration? */
-		if (last_eclass_col >= 0)
-		{
-			/* Yes, so recursively generate all eclass clause combinations */
-			expand_eclass_clause_combinations(root, rel, index,
-											  0, last_eclass_col,
-											  &clauseset, eclauseset,
-											  bitindexpaths);
-		}
-		else
-		{
-			/* No, consider the newly-enlarged set of simple join clauses */
-			get_index_paths(root, rel, index, &clauseset, bitindexpaths);
-		}
+		/* Consider each applicable simple join clause */
+		considered_clauses += list_length(jclauseset->indexclauses[indexcol]);
+		consider_index_join_outer_rels(root, rel, index,
+									   rclauseset, jclauseset, eclauseset,
+									   bitindexpaths,
+									   jclauseset->indexclauses[indexcol],
+									   considered_clauses,
+									   &considered_relids);
+		/* Consider each applicable eclass join clause */
+		considered_clauses += list_length(eclauseset->indexclauses[indexcol]);
+		consider_index_join_outer_rels(root, rel, index,
+									   rclauseset, jclauseset, eclauseset,
+									   bitindexpaths,
+									   eclauseset->indexclauses[indexcol],
+									   considered_clauses,
+									   &considered_relids);
 	}
 }
 
 /*
- * expand_eclass_clause_combinations
- *		Generate all combinations of eclass join clauses for first N columns,
- *		and construct parameterized index paths for each combination.
+ * consider_index_join_outer_rels
+ *	  Generate parameterized paths based on clause relids in the clause list.
  *
  * Workhorse for consider_index_join_clauses; see notes therein for rationale.
- * It's convenient to use recursion to implement the enumeration, since we
- * can have at most INDEX_MAX_KEYS recursion levels.
  *
- * 'rel', 'index', 'eclauseset', 'bitindexpaths' as above
- * 'thiscol' is the current index column number/recursion level
- * 'lastcol' is the last index column we should consider eclass clauses for
- * 'clauseset' is the current collection of indexable clauses
+ * 'rel', 'index', 'rclauseset', 'jclauseset', 'eclauseset', and
+ *		'bitindexpaths' as above
+ * 'indexjoinclauses' is a list of RestrictInfos for join clauses
+ * 'considered_clauses' is the total number of clauses considered (so far)
+ * '*considered_relids' is a list of all relids sets already considered
  */
 static void
-expand_eclass_clause_combinations(PlannerInfo *root, RelOptInfo *rel,
-								  IndexOptInfo *index,
-								  int thiscol, int lastcol,
-								  IndexClauseSet *clauseset,
-								  IndexClauseSet *eclauseset,
-								  List **bitindexpaths)
+consider_index_join_outer_rels(PlannerInfo *root, RelOptInfo *rel,
+							   IndexOptInfo *index,
+							   IndexClauseSet *rclauseset,
+							   IndexClauseSet *jclauseset,
+							   IndexClauseSet *eclauseset,
+							   List **bitindexpaths,
+							   List *indexjoinclauses,
+							   int considered_clauses,
+							   List **considered_relids)
 {
-	List	   *save_clauses;
 	ListCell   *lc;
 
-	/* If past last eclass column, end the recursion and generate paths */
-	if (thiscol > lastcol)
+	/* Examine relids of each joinclause in the given list */
+	foreach(lc, indexjoinclauses)
 	{
-		get_index_paths(root, rel, index, clauseset, bitindexpaths);
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		Relids		clause_relids = rinfo->clause_relids;
+		ListCell   *lc2;
+
+		/* If we already tried its relids set, no need to do so again */
+		if (bms_equal_any(clause_relids, *considered_relids))
+			continue;
+
+		/*
+		 * Generate the union of this clause's relids set with each
+		 * previously-tried set.  This ensures we try this clause along with
+		 * every interesting subset of previous clauses.  However, to avoid
+		 * exponential growth of planning time when there are many clauses,
+		 * limit the number of relid sets accepted to 10 * considered_clauses.
+		 *
+		 * Note: get_join_index_paths adds entries to *considered_relids, but
+		 * it prepends them to the list, so that we won't visit new entries
+		 * during the inner foreach loop.  No real harm would be done if we
+		 * did, since the subset check would reject them; but it would waste
+		 * some cycles.
+		 */
+		foreach(lc2, *considered_relids)
+		{
+			Relids	oldrelids = (Relids) lfirst(lc2);
+
+			/*
+			 * If either is a subset of the other, no new set is possible.
+			 * This isn't a complete test for redundancy, but it's easy and
+			 * cheap.  get_join_index_paths will check more carefully if we
+			 * already generated the same relids set.
+			 */
+			if (bms_subset_compare(clause_relids, oldrelids) != BMS_DIFFERENT)
+				continue;
+
+			/*
+			 * If this clause was derived from an equivalence class, the
+			 * clause list may contain other clauses derived from the same
+			 * eclass.  We should not consider that combining this clause with
+			 * one of those clauses generates a usefully different
+			 * parameterization; so skip if any clause derived from the same
+			 * eclass would already have been included when using oldrelids.
+			 */
+			if (rinfo->parent_ec &&
+				eclass_already_used(rinfo->parent_ec, oldrelids,
+									indexjoinclauses))
+				continue;
+
+			/*
+			 * If the number of relid sets considered exceeds our heuristic
+			 * limit, stop considering combinations of clauses.  We'll still
+			 * consider the current clause alone, though (below this loop).
+			 */
+			if (list_length(*considered_relids) >= 10 * considered_clauses)
+				break;
+
+			/* OK, try the union set */
+			get_join_index_paths(root, rel, index,
+								 rclauseset, jclauseset, eclauseset,
+								 bitindexpaths,
+								 bms_union(clause_relids, oldrelids),
+								 considered_relids);
+		}
+
+		/* Also try this set of relids by itself */
+		get_join_index_paths(root, rel, index,
+							 rclauseset, jclauseset, eclauseset,
+							 bitindexpaths,
+							 clause_relids,
+							 considered_relids);
+	}
+}
+
+/*
+ * get_join_index_paths
+ *	  Generate index paths using clauses from the specified outer relations.
+ *	  In addition to generating paths, relids is added to *considered_relids
+ *	  if not already present.
+ *
+ * Workhorse for consider_index_join_clauses; see notes therein for rationale.
+ *
+ * 'rel', 'index', 'rclauseset', 'jclauseset', 'eclauseset',
+ *		'bitindexpaths', 'considered_relids' as above
+ * 'relids' is the current set of relids to consider (the target rel plus
+ *		one or more outer rels)
+ */
+static void
+get_join_index_paths(PlannerInfo *root, RelOptInfo *rel,
+					 IndexOptInfo *index,
+					 IndexClauseSet *rclauseset,
+					 IndexClauseSet *jclauseset,
+					 IndexClauseSet *eclauseset,
+					 List **bitindexpaths,
+					 Relids relids,
+					 List **considered_relids)
+{
+	IndexClauseSet clauseset;
+	int			indexcol;
+
+	/* If we already considered this relids set, don't repeat the work */
+	if (bms_equal_any(relids, *considered_relids))
 		return;
+
+	/* Identify indexclauses usable with this relids set */
+	MemSet(&clauseset, 0, sizeof(clauseset));
+
+	for (indexcol = 0; indexcol < index->ncolumns; indexcol++)
+	{
+		ListCell   *lc;
+
+		/* First find applicable simple join clauses */
+		foreach(lc, jclauseset->indexclauses[indexcol])
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+			if (bms_is_subset(rinfo->clause_relids, relids))
+				clauseset.indexclauses[indexcol] =
+					lappend(clauseset.indexclauses[indexcol], rinfo);
+		}
+
+		/*
+		 * Add applicable eclass join clauses.  The clauses generated for each
+		 * column are redundant (cf generate_implied_equalities_for_indexcol),
+		 * so we need at most one.  This is the only exception to the general
+		 * rule of using all available index clauses.
+		 */
+		foreach(lc, eclauseset->indexclauses[indexcol])
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+			if (bms_is_subset(rinfo->clause_relids, relids))
+			{
+				clauseset.indexclauses[indexcol] =
+					lappend(clauseset.indexclauses[indexcol], rinfo);
+				break;
+			}
+		}
+
+		/* Add restriction clauses (this is nondestructive to rclauseset) */
+		clauseset.indexclauses[indexcol] =
+			list_concat(clauseset.indexclauses[indexcol],
+						rclauseset->indexclauses[indexcol]);
+
+		if (clauseset.indexclauses[indexcol] != NIL)
+			clauseset.nonempty = true;
 	}
 
-	/* If no eclass clauses to consider for this column, just recurse */
-	if (eclauseset->indexclauses[thiscol] == NIL)
-	{
-		Assert(thiscol < lastcol);
-		expand_eclass_clause_combinations(root, rel, index,
-										  thiscol + 1, lastcol,
-										  clauseset, eclauseset,
-										  bitindexpaths);
-		return;
-	}
+	/* We should have found something, else caller passed silly relids */
+	Assert(clauseset.nonempty);
 
-	/* We'll momentarily save and restore the list of non-eclass clauses */
-	save_clauses = clauseset->indexclauses[thiscol];
+	/* Build index path(s) using the collected set of clauses */
+	get_index_paths(root, rel, index, &clauseset, bitindexpaths);
 
-	/* If we have non-eclass clauses for this column, first try with those */
-	if (save_clauses)
-		expand_eclass_clause_combinations(root, rel, index,
-										  thiscol + 1, lastcol,
-										  clauseset, eclauseset,
-										  bitindexpaths);
+	/*
+	 * Remember we considered paths for this set of relids.  We use lcons not
+	 * lappend to avoid confusing the loop in consider_index_join_outer_rels.
+	 */
+	*considered_relids = lcons(relids, *considered_relids);
+}
 
-	/* For each eclass clause alternative ... */
-	foreach(lc, eclauseset->indexclauses[thiscol])
+/*
+ * eclass_already_used
+ *		True if any join clause usable with oldrelids was generated from
+ *		the specified equivalence class.
+ */
+static bool
+eclass_already_used(EquivalenceClass *parent_ec, Relids oldrelids,
+					List *indexjoinclauses)
+{
+	ListCell   *lc;
+
+	foreach(lc, indexjoinclauses)
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 
-		/* Replace any existing clauses with the eclass clause */
-		clauseset->indexclauses[thiscol] = list_make1(rinfo);
-
-		/* Recurse to advance to next column */
-		expand_eclass_clause_combinations(root, rel, index,
-										  thiscol + 1, lastcol,
-										  clauseset, eclauseset,
-										  bitindexpaths);
+		if (rinfo->parent_ec == parent_ec &&
+			bms_is_subset(rinfo->clause_relids, oldrelids))
+			return true;
 	}
+	return false;
+}
 
-	/* Restore previous list contents */
-	clauseset->indexclauses[thiscol] = save_clauses;
+/*
+ * bms_equal_any
+ *		True if relids is bms_equal to any member of relids_list
+ *
+ * Perhaps this should be in bitmapset.c someday.
+ */
+static bool
+bms_equal_any(Relids relids, List *relids_list)
+{
+	ListCell   *lc;
+
+	foreach(lc, relids_list)
+	{
+		if (bms_equal(relids, (Relids) lfirst(lc)))
+			return true;
+	}
+	return false;
 }
 
 
@@ -697,6 +814,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	List	   *index_pathkeys;
 	List	   *useful_pathkeys;
 	bool		found_clause;
+	bool		found_lower_saop_clause;
 	bool		pathkeys_possibly_useful;
 	bool		index_is_ordered;
 	bool		index_only_scan;
@@ -734,12 +852,20 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * if saop_control is SAOP_REQUIRE, it has to be a ScalarArrayOpExpr
 	 * clause.
 	 *
+	 * found_lower_saop_clause is set true if there's a ScalarArrayOpExpr
+	 * index clause for a non-first index column.  This prevents us from
+	 * assuming that the scan result is ordered.  (Actually, the result is
+	 * still ordered if there are equality constraints for all earlier
+	 * columns, but it seems too expensive and non-modular for this code to be
+	 * aware of that refinement.)
+	 *
 	 * We also build a Relids set showing which outer rels are required by the
 	 * selected clauses.
 	 */
 	index_clauses = NIL;
 	clause_columns = NIL;
 	found_clause = false;
+	found_lower_saop_clause = false;
 	outer_relids = NULL;
 	for (indexcol = 0; indexcol < index->ncolumns; indexcol++)
 	{
@@ -755,6 +881,8 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 				if (saop_control == SAOP_PER_AM && !index->amsearcharray)
 					continue;
 				found_clause = true;
+				if (indexcol > 0)
+					found_lower_saop_clause = true;
 			}
 			else
 			{
@@ -791,9 +919,11 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	/*
 	 * 2. Compute pathkeys describing index's ordering, if any, then see how
 	 * many of them are actually useful for this query.  This is not relevant
-	 * if we are only trying to build bitmap indexscans.
+	 * if we are only trying to build bitmap indexscans, nor if we have to
+	 * assume the scan is unordered.
 	 */
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
+								!found_lower_saop_clause &&
 								has_useful_pathkeys(root, rel));
 	index_is_ordered = (index->sortopfamily != NULL);
 	if (index_is_ordered && pathkeys_possibly_useful)
