@@ -572,6 +572,7 @@ static uint32 readRecordBufSize = 0;
 static XLogRecPtr ReadRecPtr;	/* start of last record read */
 static XLogRecPtr EndRecPtr;	/* end+1 of last record read */
 static TimeLineID lastPageTLI = 0;
+static TimeLineID lastSegmentTLI = 0;
 
 static XLogRecPtr minRecoveryPoint;		/* local copy of
 										 * ControlFile->minRecoveryPoint */
@@ -655,7 +656,7 @@ static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
 static XLogRecord *ReadRecord(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt);
 static void CheckRecoveryConsistency(void);
-static bool ValidXLOGHeader(XLogPageHeader hdr, int emode);
+static bool ValidXLOGHeader(XLogPageHeader hdr, int emode, bool segmentonly);
 static XLogRecord *ReadCheckpointRecord(XLogRecPtr RecPtr, int whichChkpt);
 static List *readTimeLineHistory(TimeLineID targetTLI);
 static bool existsTimeLineHistory(TimeLineID probeTLI);
@@ -843,8 +844,8 @@ begin:;
 	 * At the exit of this loop, write_len includes the backup block data.
 	 *
 	 * Also set the appropriate info bits to show which buffers were backed
-	 * up. The i'th XLR_SET_BKP_BLOCK bit corresponds to the i'th distinct
-	 * buffer value (ignoring InvalidBuffer) appearing in the rdata chain.
+	 * up. The XLR_BKP_BLOCK(N) bit corresponds to the N'th distinct buffer
+	 * value (ignoring InvalidBuffer) appearing in the rdata chain.
 	 */
 	rdt_lastnormal = rdt;
 	write_len = len;
@@ -856,7 +857,7 @@ begin:;
 		if (!dtbuf_bkp[i])
 			continue;
 
-		info |= XLR_SET_BKP_BLOCK(i);
+		info |= XLR_BKP_BLOCK(i);
 
 		bkpb = &(dtbuf_xlg[i]);
 		page = (char *) BufferGetBlock(dtbuf[i]);
@@ -3706,9 +3707,16 @@ CleanupBackupHistory(void)
 }
 
 /*
- * Restore the backup blocks present in an XLOG record, if any.
+ * Restore a full-page image from a backup block attached to an XLOG record.
  *
- * We assume all of the record has been read into memory at *record.
+ * lsn: LSN of the XLOG record being replayed
+ * record: the complete XLOG record
+ * block_index: which backup block to restore (0 .. XLR_MAX_BKP_BLOCKS - 1)
+ * get_cleanup_lock: TRUE to get a cleanup rather than plain exclusive lock
+ * keep_buffer: TRUE to return the buffer still locked and pinned
+ *
+ * Returns the buffer number containing the page.  Note this is not terribly
+ * useful unless keep_buffer is specified as TRUE.
  *
  * Note: when a backup block is available in XLOG, we restore it
  * unconditionally, even if the page in the database appears newer.
@@ -3719,15 +3727,20 @@ CleanupBackupHistory(void)
  * modifications of the page that appear in XLOG, rather than possibly
  * ignoring them as already applied, but that's not a huge drawback.
  *
- * If 'cleanup' is true, a cleanup lock is used when restoring blocks.
- * Otherwise, a normal exclusive lock is used.	During crash recovery, that's
- * just pro forma because there can't be any regular backends in the system,
- * but in hot standby mode the distinction is important. The 'cleanup'
- * argument applies to all backup blocks in the WAL record, that suffices for
- * now.
+ * If 'get_cleanup_lock' is true, a cleanup lock is obtained on the buffer,
+ * else a normal exclusive lock is used.  During crash recovery, that's just
+ * pro forma because there can't be any regular backends in the system, but
+ * in hot standby mode the distinction is important.
+ *
+ * If 'keep_buffer' is true, return without releasing the buffer lock and pin;
+ * then caller is responsible for doing UnlockReleaseBuffer() later.  This
+ * is needed in some cases when replaying XLOG records that touch multiple
+ * pages, to prevent inconsistent states from being visible to other backends.
+ * (Again, that's only important in hot standby mode.)
  */
-void
-RestoreBkpBlocks(XLogRecPtr lsn, XLogRecord *record, bool cleanup)
+Buffer
+RestoreBackupBlock(XLogRecPtr lsn, XLogRecord *record, int block_index,
+				   bool get_cleanup_lock, bool keep_buffer)
 {
 	Buffer		buffer;
 	Page		page;
@@ -3735,49 +3748,59 @@ RestoreBkpBlocks(XLogRecPtr lsn, XLogRecord *record, bool cleanup)
 	char	   *blk;
 	int			i;
 
-	if (!(record->xl_info & XLR_BKP_BLOCK_MASK))
-		return;
-
+	/* Locate requested BkpBlock in the record */
 	blk = (char *) XLogRecGetData(record) + record->xl_len;
 	for (i = 0; i < XLR_MAX_BKP_BLOCKS; i++)
 	{
-		if (!(record->xl_info & XLR_SET_BKP_BLOCK(i)))
+		if (!(record->xl_info & XLR_BKP_BLOCK(i)))
 			continue;
 
 		memcpy(&bkpb, blk, sizeof(BkpBlock));
 		blk += sizeof(BkpBlock);
 
-		buffer = XLogReadBufferExtended(bkpb.node, bkpb.fork, bkpb.block,
-										RBM_ZERO);
-		Assert(BufferIsValid(buffer));
-		if (cleanup)
-			LockBufferForCleanup(buffer);
-		else
-			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-
-		page = (Page) BufferGetPage(buffer);
-
-		if (bkpb.hole_length == 0)
+		if (i == block_index)
 		{
-			memcpy((char *) page, blk, BLCKSZ);
-		}
-		else
-		{
-			memcpy((char *) page, blk, bkpb.hole_offset);
-			/* must zero-fill the hole */
-			MemSet((char *) page + bkpb.hole_offset, 0, bkpb.hole_length);
-			memcpy((char *) page + (bkpb.hole_offset + bkpb.hole_length),
-				   blk + bkpb.hole_offset,
-				   BLCKSZ - (bkpb.hole_offset + bkpb.hole_length));
-		}
+			/* Found it, apply the update */
+			buffer = XLogReadBufferExtended(bkpb.node, bkpb.fork, bkpb.block,
+											RBM_ZERO);
+			Assert(BufferIsValid(buffer));
+			if (get_cleanup_lock)
+				LockBufferForCleanup(buffer);
+			else
+				LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
-		PageSetLSN(page, lsn);
-		PageSetTLI(page, ThisTimeLineID);
-		MarkBufferDirty(buffer);
-		UnlockReleaseBuffer(buffer);
+			page = (Page) BufferGetPage(buffer);
+
+			if (bkpb.hole_length == 0)
+			{
+				memcpy((char *) page, blk, BLCKSZ);
+			}
+			else
+			{
+				memcpy((char *) page, blk, bkpb.hole_offset);
+				/* must zero-fill the hole */
+				MemSet((char *) page + bkpb.hole_offset, 0, bkpb.hole_length);
+				memcpy((char *) page + (bkpb.hole_offset + bkpb.hole_length),
+					   blk + bkpb.hole_offset,
+					   BLCKSZ - (bkpb.hole_offset + bkpb.hole_length));
+			}
+
+			PageSetLSN(page, lsn);
+			PageSetTLI(page, ThisTimeLineID);
+			MarkBufferDirty(buffer);
+
+			if (!keep_buffer)
+				UnlockReleaseBuffer(buffer);
+
+			return buffer;
+		}
 
 		blk += BLCKSZ - bkpb.hole_length;
 	}
+
+	/* Caller specified a bogus block_index */
+	elog(ERROR, "failed to restore block_index %d", block_index);
+	return InvalidBuffer;		/* keep compiler quiet */
 }
 
 /*
@@ -3806,7 +3829,7 @@ RecordIsValid(XLogRecord *record, XLogRecPtr recptr, int emode)
 	{
 		uint32		blen;
 
-		if (!(record->xl_info & XLR_SET_BKP_BLOCK(i)))
+		if (!(record->xl_info & XLR_BKP_BLOCK(i)))
 			continue;
 
 		memcpy(&bkpb, blk, sizeof(BkpBlock));
@@ -3927,7 +3950,7 @@ ReadRecord(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt)
 		 * to go backwards (but we can't reset that variable right here, since
 		 * we might not change files at all).
 		 */
-		lastPageTLI = 0;		/* see comment in ValidXLOGHeader */
+		lastPageTLI = lastSegmentTLI = 0;	/* see comment in ValidXLOGHeader */
 		randAccess = true;		/* allow curFileTLI to go backwards too */
 	}
 
@@ -4190,7 +4213,7 @@ next_record_is_invalid:
  * ReadRecord.	It's not intended for use from anywhere else.
  */
 static bool
-ValidXLOGHeader(XLogPageHeader hdr, int emode)
+ValidXLOGHeader(XLogPageHeader hdr, int emode, bool segmentonly)
 {
 	XLogRecPtr	recaddr;
 
@@ -4285,18 +4308,31 @@ ValidXLOGHeader(XLogPageHeader hdr, int emode)
 	 * successive pages of a consistent WAL sequence.
 	 *
 	 * Of course this check should only be applied when advancing sequentially
-	 * across pages; therefore ReadRecord resets lastPageTLI to zero when
-	 * going to a random page.
+	 * across pages; therefore ReadRecord resets lastPageTLI and
+	 * lastSegmentTLI to zero when going to a random page.
+	 *
+	 * Sometimes we re-open a segment that's already been partially replayed.
+	 * In that case we cannot perform the normal TLI check: if there is a
+	 * timeline switch within the segment, the first page has a smaller TLI
+	 * than later pages following the timeline switch, and we might've read
+	 * them already. As a weaker test, we still check that it's not smaller
+	 * than the TLI we last saw at the beginning of a segment. Pass
+	 * segmentonly = true when re-validating the first page like that, and the
+	 * page you're actually interested in comes later.
 	 */
-	if (hdr->xlp_tli < lastPageTLI)
+	if (hdr->xlp_tli < (segmentonly ? lastSegmentTLI : lastPageTLI))
 	{
 		ereport(emode_for_corrupt_record(emode, recaddr),
 				(errmsg("out-of-sequence timeline ID %u (after %u) in log file %u, segment %u, offset %u",
-						hdr->xlp_tli, lastPageTLI,
+						hdr->xlp_tli,
+						segmentonly ? lastSegmentTLI : lastPageTLI,
 						readId, readSeg, readOff)));
 		return false;
 	}
 	lastPageTLI = hdr->xlp_tli;
+	if (readOff == 0)
+		lastSegmentTLI = hdr->xlp_tli;
+
 	return true;
 }
 
@@ -5880,13 +5916,19 @@ recoveryStopsHere(XLogRecord *record, bool *includeThis)
 }
 
 /*
- * Recheck shared recoveryPause by polling.
+ * Wait until shared recoveryPause flag is cleared.
  *
- * XXX Can also be done with shared latch.
+ * XXX Could also be done with shared latch, avoiding the pg_usleep loop.
+ * Probably not worth the trouble though.  This state shouldn't be one that
+ * anyone cares about server power consumption in.
  */
 static void
 recoveryPausesHere(void)
 {
+	/* Don't pause unless users can connect! */
+	if (!LocalHotStandbyActive)
+		return;
+
 	ereport(LOG,
 			(errmsg("recovery has paused"),
 			 errhint("Execute pg_xlog_replay_resume() to continue.")));
@@ -6614,7 +6656,6 @@ StartupXLOG(void)
 		{
 			bool		recoveryContinue = true;
 			bool		recoveryApply = true;
-			bool		recoveryPause = false;
 			ErrorContextCallback errcontext;
 			TimestampTz xtime;
 
@@ -6657,21 +6698,35 @@ StartupXLOG(void)
 				CheckRecoveryConsistency();
 
 				/*
+				 * Pause WAL replay, if requested by a hot-standby session via
+				 * SetRecoveryPause().
+				 *
+				 * Note that we intentionally don't take the info_lck spinlock
+				 * here.  We might therefore read a slightly stale value of
+				 * the recoveryPause flag, but it can't be very stale (no
+				 * worse than the last spinlock we did acquire).  Since a
+				 * pause request is a pretty asynchronous thing anyway,
+				 * possibly responding to it one WAL record later than we
+				 * otherwise would is a minor issue, so it doesn't seem worth
+				 * adding another spinlock cycle to prevent that.
+				 */
+				if (xlogctl->recoveryPause)
+					recoveryPausesHere();
+
+				/*
 				 * Have we reached our recovery target?
 				 */
 				if (recoveryStopsHere(record, &recoveryApply))
 				{
-					/*
-					 * Pause only if users can connect to send a resume
-					 * message
-					 */
-					if (recoveryPauseAtTarget && standbyState == STANDBY_SNAPSHOT_READY)
+					if (recoveryPauseAtTarget)
 					{
 						SetRecoveryPause(true);
 						recoveryPausesHere();
 					}
 					reachedStopPoint = true;	/* see below */
 					recoveryContinue = false;
+
+					/* Exit loop if we reached non-inclusive recovery target */
 					if (!recoveryApply)
 						break;
 				}
@@ -6704,14 +6759,7 @@ StartupXLOG(void)
 				 */
 				SpinLockAcquire(&xlogctl->info_lck);
 				xlogctl->replayEndRecPtr = EndRecPtr;
-				recoveryPause = xlogctl->recoveryPause;
 				SpinLockRelease(&xlogctl->info_lck);
-
-				/*
-				 * Pause only if users can connect to send a resume message
-				 */
-				if (recoveryPause && standbyState == STANDBY_SNAPSHOT_READY)
-					recoveryPausesHere();
 
 				/*
 				 * If we are attempting to enter Hot Standby mode, process
@@ -6727,7 +6775,7 @@ StartupXLOG(void)
 				/* Pop the error context stack */
 				error_context_stack = errcontext.previous;
 
-				if (!XLogRecPtrIsInvalid(ControlFile->backupStartPoint) &&
+				if (!XLogRecPtrIsInvalid(ControlFile->backupEndPoint) &&
 					XLByteLE(ControlFile->backupEndPoint, EndRecPtr))
 				{
 					/*
@@ -6756,10 +6804,16 @@ StartupXLOG(void)
 				xlogctl->recoveryLastRecPtr = EndRecPtr;
 				SpinLockRelease(&xlogctl->info_lck);
 
+				/* Remember this record as the last-applied one */
 				LastRec = ReadRecPtr;
 
+				/* Exit loop if we reached inclusive recovery target */
+				if (!recoveryContinue)
+					break;
+
+				/* Else, try to fetch the next WAL record */
 				record = ReadRecord(NULL, LOG, false);
-			} while (record != NULL && recoveryContinue);
+			} while (record != NULL);
 
 			/*
 			 * end of main redo apply loop
@@ -7119,9 +7173,12 @@ CheckRecoveryConsistency(void)
 		return;
 
 	/*
-	 * Have we passed our safe starting point?
+	 * Have we passed our safe starting point? Note that minRecoveryPoint
+	 * is known to be incorrectly set if ControlFile->backupEndRequired,
+	 * until the XLOG_BACKUP_RECORD arrives to advise us of the correct
+	 * minRecoveryPoint. All we prior to that is its not consistent yet.
 	 */
-	if (!reachedConsistency &&
+	if (!reachedConsistency && !ControlFile->backupEndRequired &&
 		XLByteLE(minRecoveryPoint, EndRecPtr) &&
 		XLogRecPtrIsInvalid(ControlFile->backupStartPoint))
 	{
@@ -7983,11 +8040,9 @@ CreateCheckPoint(int flags)
 	 *
 	 * If we are shutting down, or Startup process is completing crash
 	 * recovery we don't need to write running xact data.
-	 *
-	 * Update checkPoint.nextXid since we have a later value
 	 */
 	if (!shutdown && XLogStandbyInfoActive())
-		LogStandbySnapshot(&checkPoint.nextXid);
+		LogStandbySnapshot();
 
 	START_CRIT_SECTION();
 
@@ -9010,8 +9065,8 @@ xlog_outrec(StringInfo buf, XLogRecord *record)
 
 	for (i = 0; i < XLR_MAX_BKP_BLOCKS; i++)
 	{
-		if (record->xl_info & XLR_SET_BKP_BLOCK(i))
-			appendStringInfo(buf, "; bkpb%d", i + 1);
+		if (record->xl_info & XLR_BKP_BLOCK(i))
+			appendStringInfo(buf, "; bkpb%d", i);
 	}
 
 	appendStringInfo(buf, ": %s", RmgrTable[record->xl_rmid].rm_name);
@@ -10440,7 +10495,7 @@ retry:
 							readId, readSeg, readOff)));
 			goto next_record_is_invalid;
 		}
-		if (!ValidXLOGHeader((XLogPageHeader) readBuf, emode))
+		if (!ValidXLOGHeader((XLogPageHeader) readBuf, emode, true))
 			goto next_record_is_invalid;
 	}
 
@@ -10462,7 +10517,7 @@ retry:
 				readId, readSeg, readOff)));
 		goto next_record_is_invalid;
 	}
-	if (!ValidXLOGHeader((XLogPageHeader) readBuf, emode))
+	if (!ValidXLOGHeader((XLogPageHeader) readBuf, emode, false))
 		goto next_record_is_invalid;
 
 	Assert(targetId == readId);
