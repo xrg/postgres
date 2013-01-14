@@ -448,10 +448,14 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastCheckPointRecPtr;
 	CheckPoint	lastCheckPoint;
 
-	/* end+1 of the last record replayed (or being replayed) */
+	/*
+	 * lastReplayedEndRecPtr points to end+1 of the last record successfully
+	 * replayed. When we're currently replaying a record, ie. in a redo
+	 * function, replayEndRecPtr points to the end+1 of the record being
+	 * replayed, otherwise it's equal to lastReplayedEndRecPtr.
+	 */
+	XLogRecPtr	lastReplayedEndRecPtr;
 	XLogRecPtr	replayEndRecPtr;
-	/* end+1 of the last record replayed */
-	XLogRecPtr	recoveryLastRecPtr;
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
 	/* current effective recovery target timeline */
@@ -644,6 +648,7 @@ static bool XLogPageRead(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt,
 			 bool randAccess);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
+static void KeepFileRestoredFromArchive(char *path, char *xlogfname);
 static bool RestoreArchivedFile(char *path, const char *xlogfname,
 					const char *recovername, off_t expectedSize);
 static void ExecuteRecoveryCommand(char *command, char *commandName,
@@ -2838,74 +2843,12 @@ XLogFileRead(uint32 log, uint32 seg, int emode, TimeLineID tli,
 	 */
 	if (source == XLOG_FROM_ARCHIVE)
 	{
-		char		xlogfpath[MAXPGPATH];
-		bool		reload = false;
-		struct stat statbuf;
-
-		XLogFilePath(xlogfpath, tli, log, seg);
-		if (stat(xlogfpath, &statbuf) == 0)
-		{
-			char oldpath[MAXPGPATH];
-#ifdef WIN32
-			static unsigned int deletedcounter = 1;
-			/*
-			 * On Windows, if another process (e.g a walsender process) holds
-			 * the file open in FILE_SHARE_DELETE mode, unlink will succeed,
-			 * but the file will still show up in directory listing until the
-			 * last handle is closed, and we cannot rename the new file in its
-			 * place until that. To avoid that problem, rename the old file to
-			 * a temporary name first. Use a counter to create a unique
-			 * filename, because the same file might be restored from the
-			 * archive multiple times, and a walsender could still be holding
-			 * onto an old deleted version of it.
-			 */
-			snprintf(oldpath, MAXPGPATH, "%s.deleted%u",
-					 xlogfpath, deletedcounter++);
-			if (rename(xlogfpath, oldpath) != 0)
-			{
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not rename file \"%s\" to \"%s\": %m",
-								xlogfpath, oldpath)));
-			}
-#else
-			strncpy(oldpath, xlogfpath, MAXPGPATH);
-#endif
-			if (unlink(oldpath) != 0)
-				ereport(FATAL,
-						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m",
-								xlogfpath)));
-			reload = true;
-		}
-
-		if (rename(path, xlogfpath) < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not rename file \"%s\" to \"%s\": %m",
-							path, xlogfpath)));
+		KeepFileRestoredFromArchive(path, xlogfname);
 
 		/*
 		 * Set path to point at the new file in pg_xlog.
 		 */
-		strncpy(path, xlogfpath, MAXPGPATH);
-
-		/*
-		 * Create .done file forcibly to prevent the restored segment from
-		 * being archived again later.
-		 */
-		XLogArchiveForceDone(xlogfname);
-
-		/*
-		 * If the existing segment was replaced, since walsenders might have
-		 * it open, request them to reload a currently-open segment.
-		 */
-		if (reload)
-			WalSndRqstFileReload();
-
-		/* Signal walsender that new WAL has arrived */
-		if (AllowCascadeReplication())
-			WalSndWakeup();
+		snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlogfname);
 	}
 
 	fd = BasicOpenFile(path, O_RDONLY | PG_BINARY, 0);
@@ -3018,6 +2961,83 @@ XLogFileClose(void)
 				 errmsg("could not close log file %u, segment %u: %m",
 						openLogId, openLogSeg)));
 	openLogFile = -1;
+}
+
+/*
+ * A file was restored from the archive under a temporary filename (path),
+ * and now we want to keep it. Rename it under the permanent filename in
+ * in pg_xlog (xlogfname), replacing any existing file with the same name.
+ */
+static void
+KeepFileRestoredFromArchive(char *path, char *xlogfname)
+{
+	char		xlogfpath[MAXPGPATH];
+	bool		reload = false;
+	struct stat statbuf;
+
+	snprintf(xlogfpath, MAXPGPATH, XLOGDIR "/%s", xlogfname);
+
+	if (stat(xlogfpath, &statbuf) == 0)
+	{
+		char oldpath[MAXPGPATH];
+#ifdef WIN32
+		static unsigned int deletedcounter = 1;
+		/*
+		 * On Windows, if another process (e.g a walsender process) holds
+		 * the file open in FILE_SHARE_DELETE mode, unlink will succeed,
+		 * but the file will still show up in directory listing until the
+		 * last handle is closed, and we cannot rename the new file in its
+		 * place until that. To avoid that problem, rename the old file to
+		 * a temporary name first. Use a counter to create a unique
+		 * filename, because the same file might be restored from the
+		 * archive multiple times, and a walsender could still be holding
+		 * onto an old deleted version of it.
+		 */
+		snprintf(oldpath, MAXPGPATH, "%s.deleted%u",
+				 xlogfpath, deletedcounter++);
+		if (rename(xlogfpath, oldpath) != 0)
+		{
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not rename file \"%s\" to \"%s\": %m",
+							xlogfpath, oldpath)));
+		}
+#else
+		strncpy(oldpath, xlogfpath, MAXPGPATH);
+#endif
+		if (unlink(oldpath) != 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not remove file \"%s\": %m",
+							xlogfpath)));
+		reload = true;
+	}
+
+	if (rename(path, xlogfpath) < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not rename file \"%s\" to \"%s\": %m",
+						path, xlogfpath)));
+
+	/*
+	 * Create .done file forcibly to prevent the restored segment from
+	 * being archived again later.
+	 */
+	XLogArchiveForceDone(xlogfname);
+
+	/*
+	 * If the existing file was replaced, since walsenders might have it
+	 * open, request them to reload a currently-open segment. This is only
+	 * required for WAL segments, walsenders don't hold other files open,
+	 * but there's no harm in doing this too often, and we don't know what
+	 * kind of a file we're dealing with here.
+	 */
+	if (reload)
+		WalSndRqstFileReload();
+
+	/* Signal walsender that new WAL has arrived */
+	if (AllowCascadeReplication())
+		WalSndWakeup();
 }
 
 /*
@@ -3436,19 +3456,36 @@ PreallocXlogFiles(XLogRecPtr endptr)
 }
 
 /*
- * Get the log/seg of the latest removed or recycled WAL segment.
- * Returns 0/0 if no WAL segments have been removed since startup.
+ * Throws an error if the given log segment has already been removed or
+ * recycled. The caller should only pass a segment that it knows to have
+ * existed while the server has been running, as this function always
+ * succeeds if no WAL segments have been removed since startup.
+ * 'tli' is only used in the error message.
  */
 void
-XLogGetLastRemoved(uint32 *log, uint32 *seg)
+CheckXLogRemoved(uint32 log, uint32 seg, TimeLineID tli)
 {
 	/* use volatile pointer to prevent code rearrangement */
 	volatile XLogCtlData *xlogctl = XLogCtl;
+	uint32		lastRemovedLog,
+				lastRemovedSeg;
 
 	SpinLockAcquire(&xlogctl->info_lck);
-	*log = xlogctl->lastRemovedLog;
-	*seg = xlogctl->lastRemovedSeg;
+	lastRemovedLog = xlogctl->lastRemovedLog;
+	lastRemovedSeg = xlogctl->lastRemovedSeg;
 	SpinLockRelease(&xlogctl->info_lck);
+
+	if (log < lastRemovedLog ||
+		(log == lastRemovedLog && seg <= lastRemovedSeg))
+	{
+		char		filename[MAXFNAMELEN];
+
+		XLogFileName(filename, tli, log, seg);
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("requested WAL segment %s has already been removed",
+						filename)));
+	}
 }
 
 /*
@@ -4352,6 +4389,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 	char		histfname[MAXFNAMELEN];
 	char		fline[MAXPGPATH];
 	FILE	   *fd;
+	bool		fromArchive = false;
 
 	/* Timeline 1 does not have a history file, so no need to check */
 	if (targetTLI == 1)
@@ -4360,7 +4398,8 @@ readTimeLineHistory(TimeLineID targetTLI)
 	if (InArchiveRecovery)
 	{
 		TLHistoryFileName(histfname, targetTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
+		fromArchive =
+			RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
 	}
 	else
 		TLHistoryFilePath(path, targetTLI);
@@ -4428,6 +4467,13 @@ readTimeLineHistory(TimeLineID targetTLI)
 	ereport(DEBUG3,
 			(errmsg_internal("history of timeline %u is %s",
 							 targetTLI, nodeToString(result))));
+
+	/*
+	 * If the history file was fetched from archive, save it in pg_xlog for
+	 * future reference.
+	 */
+	if (fromArchive)
+		KeepFileRestoredFromArchive(path, histfname);
 
 	return result;
 }
@@ -6589,7 +6635,7 @@ StartupXLOG(void)
 		}
 
 		/*
-		 * Initialize shared replayEndRecPtr, recoveryLastRecPtr, and
+		 * Initialize shared replayEndRecPtr, lastReplayedEndRecPtr, and
 		 * recoveryLastXTime.
 		 *
 		 * This is slightly confusing if we're starting from an online
@@ -6602,7 +6648,7 @@ StartupXLOG(void)
 		 */
 		SpinLockAcquire(&xlogctl->info_lck);
 		xlogctl->replayEndRecPtr = ReadRecPtr;
-		xlogctl->recoveryLastRecPtr = EndRecPtr;
+		xlogctl->lastReplayedEndRecPtr = EndRecPtr;
 		xlogctl->recoveryLastXTime = 0;
 		xlogctl->currentChunkStartTime = 0;
 		xlogctl->recoveryPause = false;
@@ -6694,9 +6740,6 @@ StartupXLOG(void)
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
 
-				/* Allow read-only connections if we're consistent now */
-				CheckRecoveryConsistency();
-
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
 				 * SetRecoveryPause().
@@ -6775,37 +6818,19 @@ StartupXLOG(void)
 				/* Pop the error context stack */
 				error_context_stack = errcontext.previous;
 
-				if (!XLogRecPtrIsInvalid(ControlFile->backupEndPoint) &&
-					XLByteLE(ControlFile->backupEndPoint, EndRecPtr))
-				{
-					/*
-					 * We have reached the end of base backup, the point where
-					 * the minimum recovery point in pg_control indicates. The
-					 * data on disk is now consistent. Reset backupStartPoint
-					 * and backupEndPoint.
-					 */
-					elog(DEBUG1, "end of backup reached");
-
-					LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-
-					MemSet(&ControlFile->backupStartPoint, 0, sizeof(XLogRecPtr));
-					MemSet(&ControlFile->backupEndPoint, 0, sizeof(XLogRecPtr));
-					ControlFile->backupEndRequired = false;
-					UpdateControlFile();
-
-					LWLockRelease(ControlFileLock);
-				}
-
 				/*
-				 * Update shared recoveryLastRecPtr after this record has been
-				 * replayed.
+				 * Update lastReplayedEndRecPtr after this record has been
+				 * successfully replayed.
 				 */
 				SpinLockAcquire(&xlogctl->info_lck);
-				xlogctl->recoveryLastRecPtr = EndRecPtr;
+				xlogctl->lastReplayedEndRecPtr = EndRecPtr;
 				SpinLockRelease(&xlogctl->info_lck);
 
 				/* Remember this record as the last-applied one */
 				LastRec = ReadRecPtr;
+
+				/* Allow read-only connections if we're consistent now */
+				CheckRecoveryConsistency();
 
 				/* Exit loop if we reached inclusive recovery target */
 				if (!recoveryContinue)
@@ -7173,13 +7198,42 @@ CheckRecoveryConsistency(void)
 		return;
 
 	/*
+	 * Have we reached the point where our base backup was completed?
+	 */
+	if (!XLogRecPtrIsInvalid(ControlFile->backupEndPoint) &&
+		XLByteLE(ControlFile->backupEndPoint, EndRecPtr))
+	{
+		/*
+		 * We have reached the end of base backup, as indicated by pg_control.
+		 * The data on disk is now consistent. Reset backupStartPoint and
+		 * backupEndPoint, and update minRecoveryPoint to make sure we don't
+		 * allow starting up at an earlier point even if recovery is stopped
+		 * and restarted soon after this.
+		 */
+		elog(DEBUG1, "end of backup reached");
+
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
+		if (XLByteLT(ControlFile->minRecoveryPoint, EndRecPtr))
+			ControlFile->minRecoveryPoint = EndRecPtr;
+
+		MemSet(&ControlFile->backupStartPoint, 0, sizeof(XLogRecPtr));
+		MemSet(&ControlFile->backupEndPoint, 0, sizeof(XLogRecPtr));
+		ControlFile->backupEndRequired = false;
+		UpdateControlFile();
+
+		LWLockRelease(ControlFileLock);
+	}
+
+	/*
 	 * Have we passed our safe starting point? Note that minRecoveryPoint
 	 * is known to be incorrectly set if ControlFile->backupEndRequired,
 	 * until the XLOG_BACKUP_RECORD arrives to advise us of the correct
-	 * minRecoveryPoint. All we prior to that is its not consistent yet.
+	 * minRecoveryPoint. All we know prior to that is that we're not
+	 * consistent yet.
 	 */
 	if (!reachedConsistency && !ControlFile->backupEndRequired &&
-		XLByteLE(minRecoveryPoint, EndRecPtr) &&
+		XLByteLE(minRecoveryPoint, XLogCtl->lastReplayedEndRecPtr) &&
 		XLogRecPtrIsInvalid(ControlFile->backupStartPoint))
 	{
 		/*
@@ -7191,7 +7245,8 @@ CheckRecoveryConsistency(void)
 		reachedConsistency = true;
 		ereport(LOG,
 				(errmsg("consistent recovery state reached at %X/%X",
-						EndRecPtr.xlogid, EndRecPtr.xrecoff)));
+						XLogCtl->lastReplayedEndRecPtr.xlogid,
+						XLogCtl->lastReplayedEndRecPtr.xrecoff)));
 	}
 
 	/*
@@ -8402,6 +8457,13 @@ CreateRestartPoint(int flags)
 
 		KeepLogSeg(endptr, &_logId, &_logSeg);
 		PrevLogSeg(_logId, _logSeg);
+
+		/*
+		 * Update ThisTimeLineID to the recovery target timeline, so that
+		 * we install any recycled segments on the correct timeline.
+		 */
+		ThisTimeLineID = GetRecoveryTargetTLI();
+
 		RemoveOldXlogFiles(_logId, _logSeg, endptr);
 
 		/*
@@ -9398,7 +9460,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, char **labelfile)
 						  (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						   errmsg("WAL generated with full_page_writes=off was replayed "
 								  "since last restartpoint"),
-						   errhint("This means that the backup being taken on standby "
+						   errhint("This means that the backup being taken on the standby "
 								   "is corrupt and should not be used. "
 								   "Enable full_page_writes and run CHECKPOINT on the master, "
 								   "and then try an online backup again.")));
@@ -9745,7 +9807,7 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive)
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 			   errmsg("WAL generated with full_page_writes=off was replayed "
 					  "during online backup"),
-				 errhint("This means that the backup being taken on standby "
+				 errhint("This means that the backup being taken on the standby "
 						 "is corrupt and should not be used. "
 				 "Enable full_page_writes and run CHECKPOINT on the master, "
 						 "and then try an online backup again.")));
@@ -9927,7 +9989,7 @@ GetXLogReplayRecPtr(TimeLineID *targetTLI)
 	XLogRecPtr	recptr;
 
 	SpinLockAcquire(&xlogctl->info_lck);
-	recptr = xlogctl->recoveryLastRecPtr;
+	recptr = xlogctl->lastReplayedEndRecPtr;
 	if (targetTLI)
 		*targetTLI = xlogctl->RecoveryTargetTLI;
 	SpinLockRelease(&xlogctl->info_lck);
