@@ -536,6 +536,98 @@ ProcLockHashCode(const PROCLOCKTAG *proclocktag, uint32 hashcode)
 	return lockhash;
 }
 
+/*
+ * LockHasWaiters -- look up 'locktag' and check if releasing this
+ *		lock would wake up other processes waiting for it.
+ */
+bool
+LockHasWaiters(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
+{
+	LOCKMETHODID lockmethodid = locktag->locktag_lockmethodid;
+	LockMethod	lockMethodTable;
+	LOCALLOCKTAG localtag;
+	LOCALLOCK  *locallock;
+	LOCK	   *lock;
+	PROCLOCK   *proclock;
+	LWLockId	partitionLock;
+	bool		hasWaiters = false;
+
+	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
+		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
+	lockMethodTable = LockMethods[lockmethodid];
+	if (lockmode <= 0 || lockmode > lockMethodTable->numLockModes)
+		elog(ERROR, "unrecognized lock mode: %d", lockmode);
+
+#ifdef LOCK_DEBUG
+	if (LOCK_DEBUG_ENABLED(locktag))
+		elog(LOG, "LockHasWaiters: lock [%u,%u] %s",
+			 locktag->locktag_field1, locktag->locktag_field2,
+			 lockMethodTable->lockModeNames[lockmode]);
+#endif
+
+	/*
+	 * Find the LOCALLOCK entry for this lock and lockmode
+	 */
+	MemSet(&localtag, 0, sizeof(localtag));		/* must clear padding */
+	localtag.lock = *locktag;
+	localtag.mode = lockmode;
+
+	locallock = (LOCALLOCK *) hash_search(LockMethodLocalHash,
+										  (void *) &localtag,
+										  HASH_FIND, NULL);
+
+	/*
+	 * let the caller print its own error message, too. Do not ereport(ERROR).
+	 */
+	if (!locallock || locallock->nLocks <= 0)
+	{
+		elog(WARNING, "you don't own a lock of type %s",
+			 lockMethodTable->lockModeNames[lockmode]);
+		return false;
+	}
+
+	/*
+	 * Check the shared lock table.
+	 */
+	partitionLock = LockHashPartitionLock(locallock->hashcode);
+
+	LWLockAcquire(partitionLock, LW_SHARED);
+
+	/*
+	 * We don't need to re-find the lock or proclock, since we kept their
+	 * addresses in the locallock table, and they couldn't have been removed
+	 * while we were holding a lock on them.
+	 */
+	lock = locallock->lock;
+	LOCK_PRINT("LockHasWaiters: found", lock, lockmode);
+	proclock = locallock->proclock;
+	PROCLOCK_PRINT("LockHasWaiters: found", proclock);
+
+	/*
+	 * Double-check that we are actually holding a lock of the type we want to
+	 * release.
+	 */
+	if (!(proclock->holdMask & LOCKBIT_ON(lockmode)))
+	{
+		PROCLOCK_PRINT("LockHasWaiters: WRONGTYPE", proclock);
+		LWLockRelease(partitionLock);
+		elog(WARNING, "you don't own a lock of type %s",
+			 lockMethodTable->lockModeNames[lockmode]);
+		RemoveLocalLock(locallock);
+		return false;
+	}
+
+	/*
+	 * Do the checking.
+	 */
+	if ((lockMethodTable->conflictTab[lockmode] & lock->waitMask) != 0)
+		hasWaiters = true;
+
+	LWLockRelease(partitionLock);
+
+	return hasWaiters;
+}
+
 
 /*
  * LockAcquire -- Check for lock conflicts, sleep if conflict found,
@@ -2296,8 +2388,8 @@ FastPathTransferRelationLocks(LockMethod lockMethodTable, const LOCKTAG *locktag
 		LWLockAcquire(proc->backendLock, LW_EXCLUSIVE);
 
 		/*
-		 * If the target backend isn't referencing the same database as we
-		 * are, then we needn't examine the individual relation IDs at all;
+		 * If the target backend isn't referencing the same database as the
+		 * lock, then we needn't examine the individual relation IDs at all;
 		 * none of them can be relevant.
 		 *
 		 * proc->databaseId is set at backend startup time and never changes
@@ -2310,7 +2402,7 @@ FastPathTransferRelationLocks(LockMethod lockMethodTable, const LOCKTAG *locktag
 		 * fencing operation since the other backend set proc->databaseId.	So
 		 * for now, we test it after acquiring the LWLock just to be safe.
 		 */
-		if (proc->databaseId != MyDatabaseId)
+		if (proc->databaseId != locktag->locktag_field1)
 		{
 			LWLockRelease(proc->backendLock);
 			continue;
@@ -2528,14 +2620,14 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode)
 			LWLockAcquire(proc->backendLock, LW_SHARED);
 
 			/*
-			 * If the target backend isn't referencing the same database as we
-			 * are, then we needn't examine the individual relation IDs at
+			 * If the target backend isn't referencing the same database as the
+			 * lock, then we needn't examine the individual relation IDs at
 			 * all; none of them can be relevant.
 			 *
 			 * See FastPathTransferLocks() for discussion of why we do this
 			 * test after acquiring the lock.
 			 */
-			if (proc->databaseId != MyDatabaseId)
+			if (proc->databaseId != locktag->locktag_field1)
 			{
 				LWLockRelease(proc->backendLock);
 				continue;
