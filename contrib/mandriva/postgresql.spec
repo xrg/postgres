@@ -1,5 +1,6 @@
 %define git_repo postgresql
 %define git_head HEAD
+%global release_class experimental
 
 %if %_lib == lib64
 %define _requires_exceptions devel(libtcl8.4(64bit))
@@ -520,6 +521,7 @@ exit 1
 %{_bindir}/pg_basebackup
 %{_bindir}/pg_dump
 %{_bindir}/pg_dumpall
+%{_bindir}/pg_isready
 %{_bindir}/pg_restore
 %{_bindir}/psql
 %{_bindir}/reindexdb
@@ -533,6 +535,7 @@ exit 1
 %{_mandir}/man1/dropuser.*
 %{_mandir}/man1/pg_basebackup.1*
 %{_mandir}/man1/pg_dump.*
+%{_mandir}/man1/pg_isready.*
 %{_mandir}/man1/pg_dumpall.*
 %{_mandir}/man1/pg_restore.*
 %{_mandir}/man1/psql.*
