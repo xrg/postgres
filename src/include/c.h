@@ -582,7 +582,7 @@ typedef NameData *Name;
 #define AssertArg(condition) assert(condition)
 #define AssertState(condition) assert(condition)
 
-#else /* USE_ASSERT_CHECKING && FRONTEND */
+#else /* USE_ASSERT_CHECKING && !FRONTEND */
 
 /*
  * Trap

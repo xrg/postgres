@@ -381,7 +381,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean> opt_freeze opt_default opt_recheck
 %type <defelt>	opt_binary opt_oids copy_delimiter
 
-%type <boolean> copy_from
+%type <boolean> copy_from opt_program
 
 %type <ival>	opt_column event cursor_options opt_hold opt_set_data
 %type <objtype>	reindex_type drop_type comment_type security_label_type
@@ -568,7 +568,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POSITION
 	PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
-	PRIOR PRIVILEGES PROCEDURAL PROCEDURE
+	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROGRAM
 
 	QUOTE
 
@@ -1016,6 +1016,14 @@ AlterRoleSetStmt:
 				{
 					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
 					n->role = $3;
+					n->database = $4;
+					n->setstmt = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER ROLE ALL opt_in_database SetResetClause
+				{
+					AlterRoleSetStmt *n = makeNode(AlterRoleSetStmt);
+					n->role = NULL;
 					n->database = $4;
 					n->setstmt = $5;
 					$$ = (Node *)n;
@@ -2301,7 +2309,10 @@ ClosePortalStmt:
  *
  *		QUERY :
  *				COPY relname [(columnList)] FROM/TO file [WITH] [(options)]
- *				COPY ( SELECT ... ) TO file [WITH] [(options)]
+ *				COPY ( SELECT ... ) TO file	[WITH] [(options)]
+ *
+ *				where 'file' can be one of:
+ *				{ PROGRAM 'command' | STDIN | STDOUT | 'filename' }
  *
  *				In the preferred syntax the options are comma-separated
  *				and use generic identifiers instead of keywords.  The pre-9.0
@@ -2316,14 +2327,21 @@ ClosePortalStmt:
  *****************************************************************************/
 
 CopyStmt:	COPY opt_binary qualified_name opt_column_list opt_oids
-			copy_from copy_file_name copy_delimiter opt_with copy_options
+			copy_from opt_program copy_file_name copy_delimiter opt_with copy_options
 				{
 					CopyStmt *n = makeNode(CopyStmt);
 					n->relation = $3;
 					n->query = NULL;
 					n->attlist = $4;
 					n->is_from = $6;
-					n->filename = $7;
+					n->is_program = $7;
+					n->filename = $8;
+
+					if (n->is_program && n->filename == NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("STDIN/STDOUT not allowed with PROGRAM"),
+								 parser_errposition(@8)));
 
 					n->options = NIL;
 					/* Concatenate user-supplied flags */
@@ -2331,21 +2349,29 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list opt_oids
 						n->options = lappend(n->options, $2);
 					if ($5)
 						n->options = lappend(n->options, $5);
-					if ($8)
-						n->options = lappend(n->options, $8);
-					if ($10)
-						n->options = list_concat(n->options, $10);
+					if ($9)
+						n->options = lappend(n->options, $9);
+					if ($11)
+						n->options = list_concat(n->options, $11);
 					$$ = (Node *)n;
 				}
-			| COPY select_with_parens TO copy_file_name opt_with copy_options
+			| COPY select_with_parens TO opt_program copy_file_name opt_with copy_options
 				{
 					CopyStmt *n = makeNode(CopyStmt);
 					n->relation = NULL;
 					n->query = $2;
 					n->attlist = NIL;
 					n->is_from = false;
-					n->filename = $4;
-					n->options = $6;
+					n->is_program = $4;
+					n->filename = $5;
+					n->options = $7;
+
+					if (n->is_program && n->filename == NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("STDIN/STDOUT not allowed with PROGRAM"),
+								 parser_errposition(@5)));
+
 					$$ = (Node *)n;
 				}
 		;
@@ -2353,6 +2379,11 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list opt_oids
 copy_from:
 			FROM									{ $$ = TRUE; }
 			| TO									{ $$ = FALSE; }
+		;
+
+opt_program:
+			PROGRAM									{ $$ = TRUE; }
+			| /* EMPTY */							{ $$ = FALSE; }
 		;
 
 /*
@@ -7001,6 +7032,16 @@ RenameStmt: ALTER AGGREGATE func_name aggr_args RENAME TO name
 					n->subname = $9;
 					n->newname = $11;
 					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			| ALTER RULE name ON qualified_name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_RULE;
+					n->relation = $5;
+					n->subname = $3;
+					n->newname = $8;
+					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TRIGGER name ON qualified_name RENAME TO name
@@ -12648,6 +12689,7 @@ unreserved_keyword:
 			| PRIVILEGES
 			| PROCEDURAL
 			| PROCEDURE
+			| PROGRAM
 			| QUOTE
 			| RANGE
 			| READ
