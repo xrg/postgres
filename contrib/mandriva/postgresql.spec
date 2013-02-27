@@ -569,6 +569,7 @@ exit 1
 %{_bindir}/pg_ctl
 %{_bindir}/pg_resetxlog
 %{_bindir}/pg_receivexlog
+%{_bindir}/pg_xlogdump
 %{_bindir}/postgres
 %{_bindir}/postmaster
 %{_bindir}/pg_standby
@@ -581,6 +582,7 @@ exit 1
 %{_mandir}/man1/pg_controldata.*
 %{_mandir}/man1/pg_ctl.1*
 %{_mandir}/man1/pg_resetxlog.*
+%{_mandir}/man1/pg_xlogdump.*
 %{_mandir}/man1/postgres.1*
 %{_mandir}/man1/postmaster.1*
 %{_mandir}/man1/oid2name.1.*
