@@ -20,10 +20,16 @@
 
 #include "libpq-fe.h"
 
+/* in postgres_fdw.c */
+extern int	set_transmission_modes(void);
+extern void reset_transmission_modes(int nestlevel);
+
 /* in connection.c */
-extern PGconn *GetConnection(ForeignServer *server, UserMapping *user);
+extern PGconn *GetConnection(ForeignServer *server, UserMapping *user,
+			  bool will_prep_stmt);
 extern void ReleaseConnection(PGconn *conn);
 extern unsigned int GetCursorNumber(PGconn *conn);
+extern unsigned int GetPrepStmtNumber(PGconn *conn);
 extern void pgfdw_report_error(int elevel, PGresult *res, bool clear,
 				   const char *sql);
 
@@ -39,14 +45,23 @@ extern void classifyConditions(PlannerInfo *root,
 				   List **param_conds,
 				   List **local_conds,
 				   List **param_numbers);
-extern void deparseSimpleSql(StringInfo buf,
+extern void deparseSelectSql(StringInfo buf,
 				 PlannerInfo *root,
 				 RelOptInfo *baserel,
-				 List *local_conds);
+				 Bitmapset *attrs_used);
 extern void appendWhereClause(StringInfo buf,
-				  bool has_where,
+				  PlannerInfo *root,
 				  List *exprs,
-				  PlannerInfo *root);
+				  bool is_first);
+extern void deparseInsertSql(StringInfo buf, PlannerInfo *root,
+				 Index rtindex, Relation rel,
+				 List *targetAttrs, List *returningList);
+extern void deparseUpdateSql(StringInfo buf, PlannerInfo *root,
+				 Index rtindex, Relation rel,
+				 List *targetAttrs, List *returningList);
+extern void deparseDeleteSql(StringInfo buf, PlannerInfo *root,
+				 Index rtindex, Relation rel,
+				 List *returningList);
 extern void deparseAnalyzeSizeSql(StringInfo buf, Relation rel);
 extern void deparseAnalyzeSql(StringInfo buf, Relation rel);
 

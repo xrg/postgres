@@ -182,8 +182,7 @@ InsertRule(char *rulname,
 	}
 
 	/* Post creation hook for new rule */
-	InvokeObjectAccessHook(OAT_POST_CREATE,
-						   RewriteRelationId, rewriteObjectId, 0, NULL);
+	InvokeObjectPostCreateHook(RewriteRelationId, rewriteObjectId, 0);
 
 	heap_close(pg_rewrite_desc, RowExclusiveLock);
 
@@ -357,8 +356,7 @@ DefineQueryRewrite(char *rulename,
 		 */
 		checkRuleResultList(query->targetList,
 							RelationGetDescr(event_relation),
-							event_relation->rd_rel->relkind !=
-								RELKIND_MATVIEW);
+							true);
 
 		/*
 		 * ... there must not be another ON SELECT rule already ...

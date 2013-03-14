@@ -68,6 +68,7 @@ static void preprocess_rowmarks(PlannerInfo *root);
 static double preprocess_limit(PlannerInfo *root,
 				 double tuple_fraction,
 				 int64 *offset_est, int64 *count_est);
+static bool limit_needed(Query *parse);
 static void preprocess_groupclause(PlannerInfo *root);
 static bool choose_hashed_grouping(PlannerInfo *root,
 					   double tuple_fraction, double limit_tuples,
@@ -571,7 +572,8 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 			else
 				rowMarks = root->rowMarks;
 
-			plan = (Plan *) make_modifytable(parse->commandType,
+			plan = (Plan *) make_modifytable(root,
+											 parse->commandType,
 											 parse->canSetTag,
 									   list_make1_int(parse->resultRelation),
 											 list_make1(plan),
@@ -964,7 +966,8 @@ inheritance_planner(PlannerInfo *root)
 		rowMarks = root->rowMarks;
 
 	/* And last, tack on a ModifyTable node to do the UPDATE/DELETE work */
-	return (Plan *) make_modifytable(parse->commandType,
+	return (Plan *) make_modifytable(root,
+									 parse->commandType,
 									 parse->canSetTag,
 									 resultRelations,
 									 subplans,
@@ -1377,10 +1380,12 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 			{
 				/*
 				 * If the top-level plan node is one that cannot do expression
-				 * evaluation, we must insert a Result node to project the
+				 * evaluation and its existing target list isn't already what
+				 * we need, we must insert a Result node to project the
 				 * desired tlist.
 				 */
-				if (!is_projection_capable_plan(result_plan))
+				if (!is_projection_capable_plan(result_plan) &&
+					!tlist_same_exprs(sub_tlist, result_plan->targetlist))
 				{
 					result_plan = (Plan *) make_result(root,
 													   sub_tlist,
@@ -1540,10 +1545,13 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 			 * If the top-level plan node is one that cannot do expression
 			 * evaluation, we must insert a Result node to project the desired
 			 * tlist.  (In some cases this might not really be required, but
-			 * it's not worth trying to avoid it.)  Note that on second and
-			 * subsequent passes through the following loop, the top-level
-			 * node will be a WindowAgg which we know can project; so we only
-			 * need to check once.
+			 * it's not worth trying to avoid it.  In particular, think not to
+			 * skip adding the Result if the initial window_tlist matches the
+			 * top-level plan node's output, because we might change the tlist
+			 * inside the following loop.)  Note that on second and subsequent
+			 * passes through the following loop, the top-level node will be a
+			 * WindowAgg which we know can project; so we only need to check
+			 * once.
 			 */
 			if (!is_projection_capable_plan(result_plan))
 			{
@@ -1818,7 +1826,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 	/*
 	 * Finally, if there is a LIMIT/OFFSET clause, add the LIMIT node.
 	 */
-	if (parse->limitCount || parse->limitOffset)
+	if (limit_needed(parse))
 	{
 		result_plan = (Plan *) make_limit(result_plan,
 										  parse->limitOffset,
@@ -2033,6 +2041,15 @@ preprocess_rowmarks(PlannerInfo *root)
 		 * ROW_MARK_COPY items in the next loop.
 		 */
 		if (rte->rtekind != RTE_RELATION)
+			continue;
+
+		/*
+		 * Similarly, ignore RowMarkClauses for foreign tables; foreign tables
+		 * will instead get ROW_MARK_COPY items in the next loop.  (FDWs might
+		 * choose to do something special while fetching their rows, but that
+		 * is of no concern here.)
+		 */
+		if (rte->relkind == RELKIND_FOREIGN_TABLE)
 			continue;
 
 		rels = bms_del_member(rels, rc->rti);
@@ -2278,6 +2295,60 @@ preprocess_limit(PlannerInfo *root, double tuple_fraction,
 	}
 
 	return tuple_fraction;
+}
+
+/*
+ * limit_needed - do we actually need a Limit plan node?
+ *
+ * If we have constant-zero OFFSET and constant-null LIMIT, we can skip adding
+ * a Limit node.  This is worth checking for because "OFFSET 0" is a common
+ * locution for an optimization fence.  (Because other places in the planner
+ * merely check whether parse->limitOffset isn't NULL, it will still work as
+ * an optimization fence --- we're just suppressing unnecessary run-time
+ * overhead.)
+ *
+ * This might look like it could be merged into preprocess_limit, but there's
+ * a key distinction: here we need hard constants in OFFSET/LIMIT, whereas
+ * in preprocess_limit it's good enough to consider estimated values.
+ */
+static bool
+limit_needed(Query *parse)
+{
+	Node	   *node;
+
+	node = parse->limitCount;
+	if (node)
+	{
+		if (IsA(node, Const))
+		{
+			/* NULL indicates LIMIT ALL, ie, no limit */
+			if (!((Const *) node)->constisnull)
+				return true;	/* LIMIT with a constant value */
+		}
+		else
+			return true;		/* non-constant LIMIT */
+	}
+
+	node = parse->limitOffset;
+	if (node)
+	{
+		if (IsA(node, Const))
+		{
+			/* Treat NULL as no offset; the executor would too */
+			if (!((Const *) node)->constisnull)
+			{
+				int64	offset = DatumGetInt64(((Const *) node)->constvalue);
+
+				/* Executor would treat less-than-zero same as zero */
+				if (offset > 0)
+					return true;	/* OFFSET with a positive value */
+			}
+		}
+		else
+			return true;		/* non-constant OFFSET */
+	}
+
+	return false;				/* don't need a Limit plan node */
 }
 
 
