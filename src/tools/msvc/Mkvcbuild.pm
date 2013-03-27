@@ -69,7 +69,8 @@ sub mkvcbuild
 	  chklocale.c crypt.c fls.c fseeko.c getrusage.c inet_aton.c random.c
 	  srandom.c getaddrinfo.c gettimeofday.c inet_net_ntop.c kill.c open.c
 	  erand48.c snprintf.c strlcat.c strlcpy.c dirmod.c exec.c noblock.c path.c
-	  pgcheckdir.c pg_crc.c pgmkdirp.c pgsleep.c pgstrcasecmp.c qsort.c qsort_arg.c quotes.c
+	  pgcheckdir.c pg_crc.c pgmkdirp.c pgsleep.c pgstrcasecmp.c pqsignal.c
+	  qsort.c qsort_arg.c quotes.c
 	  sprompt.c tar.c thread.c wait_error.c getopt.c getopt_long.c dirent.c rint.c win32env.c
 	  win32error.c win32setlocale.c);
 
@@ -394,6 +395,7 @@ sub mkvcbuild
 	$psql->AddIncludeDir('src\bin\pg_dump');
 	$psql->AddIncludeDir('src\backend');
 	$psql->AddFile('src\bin\psql\psqlscan.l');
+	$psql->AddLibrary('ws2_32.lib');
 
 	my $pgdump = AddSimpleFrontend('pg_dump', 1);
 	$pgdump->AddIncludeDir('src\backend');
@@ -402,6 +404,7 @@ sub mkvcbuild
 	$pgdump->AddFile('src\bin\pg_dump\pg_dump_sort.c');
 	$pgdump->AddFile('src\bin\pg_dump\keywords.c');
 	$pgdump->AddFile('src\backend\parser\kwlookup.c');
+	$pgdump->AddLibrary('ws2_32.lib');
 
 	my $pgdumpall = AddSimpleFrontend('pg_dump', 1);
 
@@ -418,6 +421,7 @@ sub mkvcbuild
 	$pgdumpall->AddFile('src\bin\pg_dump\dumputils.c');
 	$pgdumpall->AddFile('src\bin\pg_dump\keywords.c');
 	$pgdumpall->AddFile('src\backend\parser\kwlookup.c');
+	$pgdumpall->AddLibrary('ws2_32.lib');
 
 	my $pgrestore = AddSimpleFrontend('pg_dump', 1);
 	$pgrestore->{name} = 'pg_restore';
@@ -425,6 +429,7 @@ sub mkvcbuild
 	$pgrestore->AddFile('src\bin\pg_dump\pg_restore.c');
 	$pgrestore->AddFile('src\bin\pg_dump\keywords.c');
 	$pgrestore->AddFile('src\backend\parser\kwlookup.c');
+	$pgrestore->AddLibrary('ws2_32.lib');
 
 	my $zic = $solution->AddProject('zic', 'exe', 'utils');
 	$zic->AddFiles('src\timezone', 'zic.c', 'ialloc.c', 'scheck.c',
@@ -571,6 +576,7 @@ sub mkvcbuild
 		$proj->AddIncludeDir('src\bin\psql');
 		$proj->AddReference($libpq, $libpgport, $libpgcommon);
 		$proj->AddResourceFile('src\bin\scripts', 'PostgreSQL Utility');
+		$proj->AddLibrary('ws2_32.lib');
 	}
 
 	# Regression DLL and EXE

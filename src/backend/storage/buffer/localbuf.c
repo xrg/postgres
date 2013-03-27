@@ -196,16 +196,19 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	if (bufHdr->flags & BM_DIRTY)
 	{
-		SMgrRelation oreln;
+		SMgrRelation	oreln;
+		Page			localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
 		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+
+		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 		/* And write... */
 		smgrwrite(oreln,
 				  bufHdr->tag.forkNum,
 				  bufHdr->tag.blockNum,
-				  (char *) LocalBufHdrGetBlock(bufHdr),
+				  localpage,
 				  false);
 
 		/* Mark not-dirty now in case we error out below */
@@ -497,14 +500,22 @@ void
 AtEOXact_LocalBuffers(bool isCommit)
 {
 #ifdef USE_ASSERT_CHECKING
-	if (assert_enabled)
+	if (assert_enabled && LocalRefCount)
 	{
+		int			RefCountErrors = 0;
 		int			i;
 
 		for (i = 0; i < NLocBuffer; i++)
 		{
-			Assert(LocalRefCount[i] == 0);
+			if (LocalRefCount[i] != 0)
+			{
+				Buffer	b = -i - 1;
+
+				PrintBufferLeakWarning(b);
+				RefCountErrors++;
+			}
 		}
+		Assert(RefCountErrors == 0);
 	}
 #endif
 }
@@ -523,12 +534,20 @@ AtProcExit_LocalBuffers(void)
 #ifdef USE_ASSERT_CHECKING
 	if (assert_enabled && LocalRefCount)
 	{
+		int			RefCountErrors = 0;
 		int			i;
 
 		for (i = 0; i < NLocBuffer; i++)
 		{
-			Assert(LocalRefCount[i] == 0);
+			if (LocalRefCount[i] != 0)
+			{
+				Buffer	b = -i - 1;
+
+				PrintBufferLeakWarning(b);
+				RefCountErrors++;
+			}
 		}
+		Assert(RefCountErrors == 0);
 	}
 #endif
 }

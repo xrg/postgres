@@ -122,6 +122,7 @@ extern int	CommitDelay;
 extern int	CommitSiblings;
 extern char *default_tablespace;
 extern char *temp_tablespaces;
+extern bool ignore_checksum_failure;
 extern bool synchronize_seqscans;
 extern int	ssl_renegotiation_limit;
 extern char *SSLCipherSuites;
@@ -423,6 +424,7 @@ int			temp_file_limit = -1;
 int			num_temp_buffers = 1024;
 
 char	   *data_directory;
+char	   *recovery_config_directory;
 char	   *ConfigFileName;
 char	   *HbaFileName;
 char	   *IdentFileName;
@@ -805,6 +807,21 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&enableFsync,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"ignore_checksum_failure", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Continues processing after a checksum failure."),
+			gettext_noop("Detection of a checksum failure normally causes PostgreSQL to "
+				"report an error, aborting the current transaction. Setting "
+						 "ignore_checksum_failure to true causes the system to ignore the failure "
+						 "(but still report a warning), and continue processing. This "
+						 "behavior could cause crashes or other serious problems. Only "
+						 "has an effect if checksums are enabled."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&ignore_checksum_failure,
+		false,
 		NULL, NULL, NULL
 	},
 	{
@@ -1862,6 +1879,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"lock_timeout", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the maximum allowed duration of any wait for a lock."),
+			gettext_noop("A value of 0 turns off the timeout."),
+			GUC_UNIT_MS
+		},
+		&LockTimeout,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"vacuum_freeze_min_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Minimum age at which VACUUM should freeze a table row."),
 			NULL
@@ -2031,7 +2059,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"commit_delay", PGC_USERSET, WAL_SETTINGS,
+		{"commit_delay", PGC_SUSET, WAL_SETTINGS,
 			gettext_noop("Sets the delay in microseconds between transaction commit and "
 						 "flushing WAL to disk."),
 			NULL
@@ -2929,6 +2957,17 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&data_directory,
+		NULL,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"recovery_config_directory", PGC_POSTMASTER, FILE_LOCATIONS,
+			gettext_noop("Sets the server's recovery configuration directory."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&recovery_config_directory,
 		NULL,
 		NULL, NULL, NULL
 	},
@@ -4148,11 +4187,26 @@ SelectConfigFiles(const char *userDoption, const char *progname)
 	 * Reflect the final DataDir value back into the data_directory GUC var.
 	 * (If you are wondering why we don't just make them a single variable,
 	 * it's because the EXEC_BACKEND case needs DataDir to be transmitted to
-	 * child backends specially.  XXX is that still true?  Given that we now
-	 * chdir to DataDir, EXEC_BACKEND can read the config file without knowing
-	 * DataDir in advance.)
+	 * child backends specially.
 	 */
 	SetConfigOption("data_directory", DataDir, PGC_POSTMASTER, PGC_S_OVERRIDE);
+
+	/*
+	 * If the recovery_config_directory GUC variable has been set, use that,
+	 * otherwise use DataDir.
+	 *
+	 * Note: SetRecoveryConfDir will copy and absolute-ize its argument,
+	 * so we don't have to.
+	 */
+	if (recovery_config_directory)
+		SetRecoveryConfDir(recovery_config_directory);
+	else
+		SetRecoveryConfDir(DataDir);
+
+	/*
+	 * Reflect the final RecoveryConfDir value back into the GUC var, as above.
+	 */
+	SetConfigOption("recovery_config_directory", RecoveryConfDir, PGC_POSTMASTER, PGC_S_OVERRIDE);
 
 	/*
 	 * If timezone_abbreviations wasn't set in the configuration file, install

@@ -243,7 +243,7 @@ main(int argc, char *argv[])
 	printf(_("Fake LSN counter for unlogged rels:   %X/%X\n"),
 		   (uint32) (ControlFile.unloggedLSN >> 32),
 		   (uint32) ControlFile.unloggedLSN);
-	printf(_("Min recovery ending location:         %X/%X\n"),
+	printf(_("Minimum recovery ending location:     %X/%X\n"),
 		   (uint32) (ControlFile.minRecoveryPoint >> 32),
 		   (uint32) ControlFile.minRecoveryPoint);
 	printf(_("Min recovery ending loc's timeline:   %u\n"),
@@ -287,5 +287,7 @@ main(int argc, char *argv[])
 		   (ControlFile.float4ByVal ? _("by value") : _("by reference")));
 	printf(_("Float8 argument passing:              %s\n"),
 		   (ControlFile.float8ByVal ? _("by value") : _("by reference")));
+	printf(_("Data page checksums:                  %s\n"),
+		   (ControlFile.data_checksums ? _("enabled") : _("disabled")));
 	return 0;
 }

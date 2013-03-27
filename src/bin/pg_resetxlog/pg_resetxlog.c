@@ -624,6 +624,8 @@ PrintControlValues(bool guessed)
 		   (ControlFile.float4ByVal ? _("by value") : _("by reference")));
 	printf(_("Float8 argument passing:              %s\n"),
 		   (ControlFile.float8ByVal ? _("by value") : _("by reference")));
+	printf(_("Data page checksums:                  %s\n"),
+		   (ControlFile.data_checksums ? _("enabled") : _("disabled")));
 }
 
 
@@ -1032,7 +1034,7 @@ usage(void)
 	printf(_("Options:\n"));
 	printf(_("  -e XIDEPOCH      set next transaction ID epoch\n"));
 	printf(_("  -f               force update to be done\n"));
-	printf(_("  -l xlogfile      force minimum WAL starting location for new transaction log\n"));
+	printf(_("  -l XLOGFILE      force minimum WAL starting location for new transaction log\n"));
 	printf(_("  -m XID,OLDEST    set next multitransaction ID and oldest value\n"));
 	printf(_("  -n               no update, just show extracted control values (for testing)\n"));
 	printf(_("  -o OID           set next OID\n"));

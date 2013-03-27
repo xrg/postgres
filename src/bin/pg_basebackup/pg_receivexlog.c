@@ -13,19 +13,20 @@
  */
 
 #include "postgres_fe.h"
-#include "libpq-fe.h"
-#include "libpq/pqsignal.h"
-#include "access/xlog_internal.h"
-
-#include "receivelog.h"
-#include "streamutil.h"
 
 #include <dirent.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "libpq-fe.h"
+#include "access/xlog_internal.h"
 #include "getopt_long.h"
+
+#include "receivelog.h"
+#include "streamutil.h"
+
 
 /* Time to sleep between reconnection attempts */
 #define RECONNECT_SLEEP_TIME 5
@@ -227,6 +228,16 @@ StreamLog(void)
 	if (!conn)
 		/* Error message already written in GetConnection() */
 		return;
+
+	if (!CheckServerVersionForStreaming(conn))
+	{
+		/*
+		 * Error message already written in CheckServerVersionForStreaming().
+		 * There's no hope of recovering from a version mismatch, so don't
+		 * retry.
+		 */
+		disconnect_and_exit(1);
+	}
 
 	/*
 	 * Run IDENTIFY_SYSTEM so we can get the timeline and current xlog
