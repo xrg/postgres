@@ -62,7 +62,6 @@
 
 extern bool bootstrap_data_checksums;
 
-char	recoveryConfPath[MAXPGPATH];
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
 #define RECOVERY_COMMAND_DONE	"recovery.done"
@@ -4164,8 +4163,7 @@ readRecoveryCommandFile(void)
 			   *head = NULL,
 			   *tail = NULL;
 
-	snprintf(recoveryConfPath, MAXPGPATH, "%s/%s", RecoveryConfDir, RECOVERY_COMMAND_FILE);
-	fd = AllocateFile(recoveryConfPath, "r");
+	fd = AllocateFile(RECOVERY_COMMAND_FILE, "r");
 	if (fd == NULL)
 	{
 		if (errno == ENOENT)
@@ -4173,7 +4171,7 @@ readRecoveryCommandFile(void)
 		ereport(FATAL,
 				(errcode_for_file_access(),
 				 errmsg("could not open recovery command file \"%s\": %m",
-						recoveryConfPath)));
+						RECOVERY_COMMAND_FILE)));
 	}
 
 	/*
@@ -4347,7 +4345,7 @@ readRecoveryCommandFile(void)
 		if (PrimaryConnInfo == NULL && recoveryRestoreCommand == NULL)
 			ereport(WARNING,
 					(errmsg("recovery command file \"%s\" specified neither primary_conninfo nor restore_command",
-							recoveryConfPath),
+							RECOVERY_COMMAND_FILE),
 					 errhint("The database server will regularly poll the pg_xlog subdirectory to check for files placed there.")));
 	}
 	else
@@ -4355,7 +4353,7 @@ readRecoveryCommandFile(void)
 		if (recoveryRestoreCommand == NULL)
 			ereport(FATAL,
 					(errmsg("recovery command file \"%s\" must specify restore_command when standby mode is not enabled",
-							recoveryConfPath)));
+							RECOVERY_COMMAND_FILE)));
 	}
 
 	/* Enable fetching from archive recovery area */
@@ -4397,7 +4395,6 @@ static void
 exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 {
 	char		recoveryPath[MAXPGPATH];
-	char		recoveryDonePath[MAXPGPATH];
 	char		xlogpath[MAXPGPATH];
 
 	/*
@@ -4462,13 +4459,12 @@ exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 	 * Rename the config file out of the way, so that we don't accidentally
 	 * re-enter archive recovery mode in a subsequent crash.
 	 */
-	snprintf(recoveryDonePath, MAXPGPATH, "%s/%s", RecoveryConfDir, RECOVERY_COMMAND_DONE);
-	unlink(recoveryDonePath);
-	if (rename(recoveryConfPath, recoveryDonePath) != 0)
+	unlink(RECOVERY_COMMAND_DONE);
+	if (rename(RECOVERY_COMMAND_FILE, RECOVERY_COMMAND_DONE) != 0)
 		ereport(FATAL,
 				(errcode_for_file_access(),
 				 errmsg("could not rename file \"%s\" to \"%s\": %m",
-						recoveryConfPath, recoveryDonePath)));
+						RECOVERY_COMMAND_FILE, RECOVERY_COMMAND_DONE)));
 
 	ereport(LOG,
 			(errmsg("archive recovery complete")));
@@ -8371,7 +8367,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 
 	backup_started_in_recovery = RecoveryInProgress();
 
-	if (!superuser() && !is_authenticated_user_replication_role())
+	if (!superuser() && !has_rolreplication(GetUserId()))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 		   errmsg("must be superuser or replication role to run a backup")));
@@ -8709,7 +8705,7 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 
 	backup_started_in_recovery = RecoveryInProgress();
 
-	if (!superuser() && !is_authenticated_user_replication_role())
+	if (!superuser() && !has_rolreplication(GetUserId()))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 		 (errmsg("must be superuser or replication role to run a backup"))));

@@ -100,25 +100,6 @@ SetDataDir(const char *dir)
 }
 
 /*
- * Set recovery config directory, but make sure it's an absolute path.  Use this,
- * never set RecoveryConfDir directly.
- */
-void
-SetRecoveryConfDir(const char *dir)
-{
-	char	   *new;
-
-	AssertArg(dir);
-
-	/* If presented path is relative, convert to absolute */
-	new = make_absolute_path(dir);
-
-	if (RecoveryConfDir)
-		free(RecoveryConfDir);
-	RecoveryConfDir = new;
-}
-
-/*
  * Change working directory to DataDir.  Most of the postmaster and backend
  * code assumes that we are in DataDir so it can use relative paths to access
  * stuff in and under the data directory.  For convenience during path
@@ -409,15 +390,15 @@ SetUserIdAndContext(Oid userid, bool sec_def_context)
 
 
 /*
- * Check if the authenticated user is a replication role
+ * Check whether specified role has explicit REPLICATION privilege
  */
 bool
-is_authenticated_user_replication_role(void)
+has_rolreplication(Oid roleid)
 {
 	bool		result = false;
 	HeapTuple	utup;
 
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(AuthenticatedUserId));
+	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
 	if (HeapTupleIsValid(utup))
 	{
 		result = ((Form_pg_authid) GETSTRUCT(utup))->rolreplication;
