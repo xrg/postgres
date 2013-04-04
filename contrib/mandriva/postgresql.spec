@@ -634,7 +634,8 @@ exit 1
 %{_bindir}/pg_config
 %{_mandir}/man1/pg_config.1*
 %{_mandir}/man1/pg_test_fsync.1.*
- %{_mandir}/man1/pg_test_timing.1.*
+%{_mandir}/man1/pg_test_timing.1.*
+%{_libdir}/pkgconfig/lib*.pc
 #From %files -n %{libnamedevel}
 #{_libdir}/libpq.so
 #From %files -n %{libecpgdevel}
