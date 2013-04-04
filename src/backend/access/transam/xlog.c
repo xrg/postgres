@@ -4010,7 +4010,16 @@ ReadRecord(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt)
 retry:
 	/* Read the page containing the record */
 	if (!XLogPageRead(RecPtr, emode, fetching_ckpt, randAccess))
-		return NULL;
+	{
+		/*
+		 * In standby-mode, XLogPageRead returning false means that promotion
+		 * has been triggered.
+		 */
+		if (StandbyMode)
+			return NULL;
+		else
+			goto next_record_is_invalid;
+	}
 
 	pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) readBuf);
 	targetRecOff = RecPtr->xrecoff % XLOG_BLCKSZ;
@@ -4168,7 +4177,16 @@ retry:
 			}
 			/* Wait for the next page to become available */
 			if (!XLogPageRead(&pagelsn, emode, false, false))
-				return NULL;
+			{
+				/*
+				 * In standby-mode, XLogPageRead returning false means that
+				 * promotion has been triggered.
+				 */
+				if (StandbyMode)
+					return NULL;
+				else
+					goto next_record_is_invalid;
+			}
 
 			/* Check that the continuation record looks valid */
 			if (!(((XLogPageHeader) readBuf)->xlp_info & XLP_FIRST_IS_CONTRECORD))
@@ -4446,7 +4464,7 @@ readTimeLineHistory(TimeLineID targetTLI)
 	if (targetTLI == 1)
 		return list_make1_int((int) targetTLI);
 
-	if (InArchiveRecovery)
+	if (ArchiveRecoveryRequested)
 	{
 		TLHistoryFileName(histfname, targetTLI);
 		fromArchive =
@@ -4543,7 +4561,7 @@ existsTimeLineHistory(TimeLineID probeTLI)
 	if (probeTLI == 1)
 		return false;
 
-	if (InArchiveRecovery)
+	if (ArchiveRecoveryRequested)
 	{
 		TLHistoryFileName(histfname, probeTLI);
 		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0);
@@ -5740,11 +5758,6 @@ readRecoveryCommandFile(void)
 	 */
 	if (rtliGiven)
 	{
-		/*
-		 * Temporarily set InArchiveRecovery, so that existsTimeLineHistory
-		 * or findNewestTimeLine below will check the archive.
-		 */
-		InArchiveRecovery = true;
 		if (rtli)
 		{
 			/* Timeline 1 does not have a history file, all else should */
@@ -5761,7 +5774,6 @@ readRecoveryCommandFile(void)
 			recoveryTargetTLI = findNewestTimeLine(recoveryTargetTLI);
 			recoveryTargetIsLatest = true;
 		}
-		InArchiveRecovery = false;
 	}
 
 	FreeConfigVariables(head);
@@ -9401,7 +9413,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, char **labelfile)
 
 	backup_started_in_recovery = RecoveryInProgress();
 
-	if (!superuser() && !is_authenticated_user_replication_role())
+	if (!superuser() && !has_rolreplication(GetUserId()))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 		   errmsg("must be superuser or replication role to run a backup")));
@@ -9731,7 +9743,7 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive)
 
 	backup_started_in_recovery = RecoveryInProgress();
 
-	if (!superuser() && !is_authenticated_user_replication_role())
+	if (!superuser() && !has_rolreplication(GetUserId()))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 		 (errmsg("must be superuser or replication role to run a backup"))));
@@ -10326,6 +10338,9 @@ CancelBackup(void)
  * and call XLogPageRead() again with the same arguments. This lets
  * XLogPageRead() to try fetching the record from another source, or to
  * sleep and retry.
+ *
+ * In standby mode, this only returns false if promotion has been triggered.
+ * Otherwise it keeps sleeping and retrying indefinitely.
  */
 static bool
 XLogPageRead(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt,
