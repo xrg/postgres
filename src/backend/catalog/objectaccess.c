@@ -11,6 +11,8 @@
 #include "postgres.h"
 
 #include "catalog/objectaccess.h"
+#include "catalog/pg_namespace.h"
+#include "catalog/pg_proc.h"
 
 /*
  * Hook on object accesses.  This is intended as infrastructure for security
@@ -83,4 +85,44 @@ RunObjectPostAlterHook(Oid classId, Oid objectId, int subId,
 	(*object_access_hook)(OAT_POST_ALTER,
 						  classId, objectId, subId,
 						  (void *) &pa_arg);
+}
+
+/*
+ * RunNamespaceSearchHook
+ *
+ * It is entrypoint of OAT_NAMESPACE_SEARCH event
+ */
+bool
+RunNamespaceSearchHook(Oid objectId, bool ereport_on_violation)
+{
+	ObjectAccessNamespaceSearch	ns_arg;
+
+	/* caller should check, but just in case... */
+	Assert(object_access_hook != NULL);
+
+	memset(&ns_arg, 0, sizeof(ObjectAccessNamespaceSearch));
+	ns_arg.ereport_on_violation = ereport_on_violation;
+	ns_arg.result = true;
+
+	(*object_access_hook)(OAT_NAMESPACE_SEARCH,
+						  NamespaceRelationId, objectId, 0,
+						  (void *) &ns_arg);
+
+	return ns_arg.result;
+}
+
+/*
+ * RunFunctionExecuteHook
+ *
+ * It is entrypoint of OAT_FUNCTION_EXECUTE event
+ */
+void
+RunFunctionExecuteHook(Oid objectId)
+{
+	/* caller should check, but just in case... */
+	Assert(object_access_hook != NULL);
+
+	(*object_access_hook)(OAT_FUNCTION_EXECUTE,
+						  ProcedureRelationId, objectId, 0,
+						  NULL);
 }
