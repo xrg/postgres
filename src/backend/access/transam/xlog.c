@@ -60,7 +60,7 @@
 #include "utils/timestamp.h"
 #include "pg_trace.h"
 
-extern bool bootstrap_data_checksums;
+extern uint32 bootstrap_data_checksum_version;
 
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -3797,7 +3797,7 @@ bool
 DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
-	return ControlFile->data_checksums;
+	return (ControlFile->data_checksum_version > 0);
 }
 
 /*
@@ -4126,7 +4126,7 @@ BootStrapXLOG(void)
 	ControlFile->max_prepared_xacts = max_prepared_xacts;
 	ControlFile->max_locks_per_xact = max_locks_per_xact;
 	ControlFile->wal_level = wal_level;
-	ControlFile->data_checksums = bootstrap_data_checksums;
+	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -9906,19 +9906,7 @@ CheckForStandbyTrigger(void)
 			fast_promote = false;
 		}
 
-		/*
-		 * We only look for fast promote via the pg_ctl promote option.
-		 * It would be possible to extend trigger file support for the
-		 * fast promotion option but that wouldn't be backwards compatible
-		 * anyway and we're looking to focus further work on the promote
-		 * option as the right way to signal end of recovery.
-		 */
-		if (fast_promote)
-			ereport(LOG,
-				(errmsg("received fast promote request")));
-		else
-			ereport(LOG,
-				(errmsg("received promote request")));
+		ereport(LOG, (errmsg("received promote request")));
 
 		ResetPromoteTriggered();
 		triggered = true;
@@ -9934,6 +9922,7 @@ CheckForStandbyTrigger(void)
 				(errmsg("trigger file found: %s", TriggerFile)));
 		unlink(TriggerFile);
 		triggered = true;
+		fast_promote = true;
 		return true;
 	}
 	return false;
