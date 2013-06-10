@@ -139,15 +139,15 @@ INSERT INTO test_json VALUES
 ('array','["zero", "one","two",null,"four","five"]'),
 ('object','{"field1":"val1","field2":"val2","field3":null}');
 
-SELECT test_json -> 'x' 
+SELECT test_json -> 'x'
 FROM test_json
 WHERE json_type = 'scalar';
 
-SELECT test_json -> 'x' 
+SELECT test_json -> 'x'
 FROM test_json
 WHERE json_type = 'array';
 
-SELECT test_json -> 'x' 
+SELECT test_json -> 'x'
 FROM test_json
 WHERE json_type = 'object';
 
@@ -155,15 +155,15 @@ SELECT test_json->'field2'
 FROM test_json
 WHERE json_type = 'object';
 
-SELECT test_json->>'field2' 
+SELECT test_json->>'field2'
 FROM test_json
 WHERE json_type = 'object';
 
-SELECT test_json -> 2 
+SELECT test_json -> 2
 FROM test_json
 WHERE json_type = 'scalar';
 
-SELECT test_json -> 2 
+SELECT test_json -> 2
 FROM test_json
 WHERE json_type = 'array';
 
@@ -296,3 +296,11 @@ select * from json_populate_recordset(null::jpop,'[{"a":"blurfl","x":43.2},{"b":
 select * from json_populate_recordset(row('def',99,null)::jpop,'[{"a":"blurfl","x":43.2},{"b":3,"c":"2012-01-20 10:42:53"}]') q;
 select * from json_populate_recordset(row('def',99,null)::jpop,'[{"a":[100,200,300],"x":43.2},{"a":{"z":true},"b":3,"c":"2012-01-20 10:42:53"}]') q;
 select * from json_populate_recordset(row('def',99,null)::jpop,'[{"c":[100,200,300],"x":43.2},{"a":{"z":true},"b":3,"c":"2012-01-20 10:42:53"}]') q;
+
+-- handling of unicode surrogate pairs
+
+select json '{ "a":  "\ud83d\ude04\ud83d\udc36" }' -> 'a' as correct;
+select json '{ "a":  "\ud83d\ud83d" }' -> 'a'; -- 2 high surrogates in a row
+select json '{ "a":  "\ude04\ud83d" }' -> 'a'; -- surrogates in wrong order
+select json '{ "a":  "\ud83dX" }' -> 'a'; -- orphan high surrogate
+select json '{ "a":  "\ude04X" }' -> 'a'; -- orphan low surrogate
