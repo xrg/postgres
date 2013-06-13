@@ -3970,7 +3970,7 @@ ReadRecord(XLogRecPtr *RecPtr, int emode, bool fetching_ckpt)
 		if (XLOG_BLCKSZ - (RecPtr->xrecoff % XLOG_BLCKSZ) < SizeOfXLogRecord)
 			NextLogPage(*RecPtr);
 
-		/* Check for crossing of xlog segment boundary */
+		/* Check for crossing of xlog logid boundary */
 		if (RecPtr->xrecoff >= XLogFileSize)
 		{
 			(RecPtr->xlogid)++;
@@ -6744,7 +6744,7 @@ StartupXLOG(void)
 		 * recoveryLastXTime.
 		 *
 		 * This is slightly confusing if we're starting from an online
-		 * checkpoint; we've just read and replayed the chekpoint record, but
+		 * checkpoint; we've just read and replayed the checkpoint record, but
 		 * we're going to start replay from its redo pointer, which precedes
 		 * the location of the checkpoint record itself. So even though the
 		 * last record we've replayed is indeed ReadRecPtr, we haven't
@@ -8566,10 +8566,18 @@ CreateRestartPoint(int flags)
 		PrevLogSeg(_logId, _logSeg);
 
 		/*
-		 * Update ThisTimeLineID to the recovery target timeline, so that
-		 * we install any recycled segments on the correct timeline.
+		 * Update ThisTimeLineID to the timeline we're currently replaying,
+		 * so that we install any recycled segments on that timeline.
+		 *
+		 * There is no guarantee that the WAL segments will be useful on the
+		 * current timeline; if recovery proceeds to a new timeline right
+		 * after this, the pre-allocated WAL segments on this timeline will
+		 * not be used, and will go wasted until recycled on the next
+		 * restartpoint. We'll live with that.
 		 */
-		ThisTimeLineID = GetRecoveryTargetTLI();
+		SpinLockAcquire(&xlogctl->info_lck);
+		ThisTimeLineID = XLogCtl->lastCheckPoint.ThisTimeLineID;
+		SpinLockRelease(&xlogctl->info_lck);
 
 		RemoveOldXlogFiles(_logId, _logSeg, endptr);
 
