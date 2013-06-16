@@ -598,7 +598,7 @@ json_lex(JsonLexContext *lex)
 					 * the whole word as an unexpected token, rather than just
 					 * some unintuitive prefix thereof.
 					 */
-					for (p = s; JSON_ALPHANUMERIC_CHAR(*p) && p - s < lex->input_length - len; p++)
+					for (p = s; p - s < lex->input_length - len && JSON_ALPHANUMERIC_CHAR(*p); p++)
 						 /* skip */ ;
 
 					/*
@@ -651,16 +651,21 @@ json_lex_string(JsonLexContext *lex)
 	if (lex->strval != NULL)
 		resetStringInfo(lex->strval);
 
+	Assert(lex->input_length > 0);
+	s = lex->token_start;
 	len = lex->token_start - lex->input;
-	len++;
-	for (s = lex->token_start + 1; *s != '"'; s++, len++)
+	for (;;)
 	{
+		s++;
+		len++;
 		/* Premature end of the string. */
 		if (len >= lex->input_length)
 		{
 			lex->token_terminator = s;
 			report_invalid_token(lex);
 		}
+		else if (*s == '"')
+			break;
 		else if ((unsigned char) *s < 32)
 		{
 			/* Per RFC4627, these characters MUST be escaped. */
@@ -717,7 +722,6 @@ json_lex_string(JsonLexContext *lex)
 				{
 					char		utf8str[5];
 					int			utf8len;
-					char	   *converted;
 
 					if (ch >= 0xd800 && ch <= 0xdbff)
 					{
@@ -749,13 +753,40 @@ json_lex_string(JsonLexContext *lex)
 								 errdetail("low order surrogate must follow a high order surrogate."),
 								 report_json_context(lex)));
 
-					unicode_to_utf8(ch, (unsigned char *) utf8str);
-					utf8len = pg_utf_mblen((unsigned char *) utf8str);
-					utf8str[utf8len] = '\0';
-					converted = pg_any_to_server(utf8str, utf8len, PG_UTF8);
-					appendStringInfoString(lex->strval, converted);
-					if (converted != utf8str)
-						pfree(converted);
+					/*
+					 * For UTF8, replace the escape sequence by the actual utf8
+					 * character in lex->strval. Do this also for other encodings
+					 * if the escape designates an ASCII character, otherwise
+					 * raise an error. We don't ever unescape a \u0000, since that
+					 * would result in an impermissible nul byte.
+					 */
+
+					if (ch == 0)
+					{
+						appendStringInfoString(lex->strval, "\\u0000");
+					}
+					else if (GetDatabaseEncoding() == PG_UTF8)
+					{
+						unicode_to_utf8(ch, (unsigned char *) utf8str);
+						utf8len = pg_utf_mblen((unsigned char *) utf8str);
+						appendBinaryStringInfo(lex->strval, utf8str, utf8len);
+					}
+					else if (ch <= 0x007f)
+					{
+						/*
+						 * This is the only way to designate things like a form feed
+						 * character in JSON, so it's useful in all encodings.
+						 */
+						appendStringInfoChar(lex->strval, (char) ch);
+					}
+					else
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+								 errmsg("invalid input syntax for type json"),
+								 errdetail("Unicode escape for code points higher than U+007F not permitted in non-UTF8 encoding"),
+								 report_json_context(lex)));
+					}
 
 				}
 			}
@@ -895,7 +926,7 @@ json_lex_number(JsonLexContext *lex, char *s)
 		{
 			s++;
 			len++;
-		} while (*s >= '0' && *s <= '9' && len < lex->input_length);
+		} while (len < lex->input_length && *s >= '0' && *s <= '9');
 	}
 	else
 		error = true;
@@ -913,7 +944,7 @@ json_lex_number(JsonLexContext *lex, char *s)
 			{
 				s++;
 				len++;
-			} while (*s >= '0' && *s <= '9' && len < lex->input_length);
+			} while (len < lex->input_length && *s >= '0' && *s <= '9');
 		}
 	}
 
@@ -944,7 +975,7 @@ json_lex_number(JsonLexContext *lex, char *s)
 	 * here should be considered part of the token for error-reporting
 	 * purposes.
 	 */
-	for (p = s; JSON_ALPHANUMERIC_CHAR(*p) && len < lex->input_length; p++, len++)
+	for (p = s; len < lex->input_length && JSON_ALPHANUMERIC_CHAR(*p); p++, len++)
 		error = true;
 	lex->prev_token_terminator = lex->token_terminator;
 	lex->token_terminator = p;
@@ -1112,8 +1143,8 @@ report_json_context(JsonLexContext *lex)
 	line_number = 1;
 	for (;;)
 	{
-		/* Always advance over newlines (context_end test is just paranoia) */
-		if (*context_start == '\n' && context_start < context_end)
+		/* Always advance over newlines */
+		if (context_start < context_end && *context_start == '\n')
 		{
 			context_start++;
 			line_start = context_start;

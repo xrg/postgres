@@ -4883,9 +4883,12 @@ StartupXLOG(void)
 				(errmsg("control file contains invalid data")));
 
 	if (ControlFile->state == DB_SHUTDOWNED)
-		ereport(LOG,
+	{
+		/* This is the expected case, so don't be chatty in standalone mode */
+		ereport(IsPostmasterEnvironment ? LOG : NOTICE,
 				(errmsg("database system was shut down at %s",
 						str_time(ControlFile->time))));
+	}
 	else if (ControlFile->state == DB_SHUTDOWNED_IN_RECOVERY)
 		ereport(LOG,
 				(errmsg("database system was shut down in recovery at %s",
@@ -6590,7 +6593,8 @@ GetNextXidAndEpoch(TransactionId *xid, uint32 *epoch)
 void
 ShutdownXLOG(int code, Datum arg)
 {
-	ereport(LOG,
+	/* Don't be chatty in standalone mode */
+	ereport(IsPostmasterEnvironment ? LOG : NOTICE,
 			(errmsg("shutting down")));
 
 	if (RecoveryInProgress())
@@ -6612,7 +6616,8 @@ ShutdownXLOG(int code, Datum arg)
 	ShutdownSUBTRANS();
 	ShutdownMultiXact();
 
-	ereport(LOG,
+	/* Don't be chatty in standalone mode */
+	ereport(IsPostmasterEnvironment ? LOG : NOTICE,
 			(errmsg("database system is shut down")));
 }
 
@@ -6984,12 +6989,9 @@ CreateCheckPoint(int flags)
 	vxids = GetVirtualXIDsDelayingChkpt(&nvxids);
 	if (nvxids > 0)
 	{
-		uint32		nwaits = 0;
-
 		do
 		{
 			pg_usleep(10000L);	/* wait for 10 msec */
-			nwaits++;
 		} while (HaveVirtualXIDsDelayingChkpt(vxids, nvxids));
 	}
 	pfree(vxids);
