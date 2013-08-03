@@ -5185,7 +5185,7 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 			if (!IsUnderPostmaster)
 				ereport(LOG,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 errmsg("background worker \"%s\": must attach to shared memory in order to request a database connection",
+						 errmsg("background worker \"%s\": must attach to shared memory in order to be able to request a database connection",
 								worker->bgw_name)));
 			return;
 		}
@@ -5227,8 +5227,10 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 		ereport(LOG,
 				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				 errmsg("too many background workers"),
-				 errdetail("Up to %d background workers can be registered with the current settings.",
-						   maxworkers)));
+				 errdetail_plural("Up to %d background worker can be registered with the current settings.",
+								  "Up to %d background workers can be registered with the current settings.",
+								  maxworkers,
+								  maxworkers)));
 		return;
 	}
 
@@ -5245,9 +5247,6 @@ RegisterBackgroundWorker(BackgroundWorker *worker)
 	}
 
 	rw->rw_worker = *worker;
-	rw->rw_worker.bgw_name = ((char *) rw) + sizeof(RegisteredBgWorker);
-	strlcpy(rw->rw_worker.bgw_name, worker->bgw_name, namelen + 1);
-
 	rw->rw_backend = NULL;
 	rw->rw_pid = 0;
 	rw->rw_child_slot = 0;
@@ -5432,16 +5431,8 @@ do_start_bgworker(void)
 		pqsignal(SIGFPE, SIG_IGN);
 	}
 
-	/* SIGTERM and SIGHUP are configurable */
-	if (worker->bgw_sigterm)
-		pqsignal(SIGTERM, worker->bgw_sigterm);
-	else
-		pqsignal(SIGTERM, bgworker_die);
-
-	if (worker->bgw_sighup)
-		pqsignal(SIGHUP, worker->bgw_sighup);
-	else
-		pqsignal(SIGHUP, SIG_IGN);
+	pqsignal(SIGTERM, bgworker_die);
+	pqsignal(SIGHUP, SIG_IGN);
 
 	pqsignal(SIGQUIT, bgworker_quickdie);
 	InitializeTimeouts();		/* establishes SIGALRM handler */
