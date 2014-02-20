@@ -782,6 +782,13 @@ inheritance_planner(PlannerInfo *root)
 		subroot.rowMarks = (List *) copyObject(root->rowMarks);
 
 		/*
+		 * The append_rel_list likewise might contain references to subquery
+		 * RTEs (if any subqueries were flattenable UNION ALLs).  So prepare
+		 * to apply ChangeVarNodes to that, too.
+		 */
+		subroot.append_rel_list = (List *) copyObject(root->append_rel_list);
+
+		/*
 		 * Add placeholders to the child Query's rangetable list to fill the
 		 * RT indexes already reserved for subqueries in previous children.
 		 * These won't be referenced, so there's no need to make them very
@@ -821,6 +828,7 @@ inheritance_planner(PlannerInfo *root)
 					newrti = list_length(subroot.parse->rtable) + 1;
 					ChangeVarNodes((Node *) subroot.parse, rti, newrti, 0);
 					ChangeVarNodes((Node *) subroot.rowMarks, rti, newrti, 0);
+					ChangeVarNodes((Node *) subroot.append_rel_list, rti, newrti, 0);
 					rte = copyObject(rte);
 					subroot.parse->rtable = lappend(subroot.parse->rtable,
 													rte);
@@ -829,7 +837,6 @@ inheritance_planner(PlannerInfo *root)
 			}
 		}
 
-		/* We needn't modify the child's append_rel_list */
 		/* There shouldn't be any OJ info to translate, as yet */
 		Assert(subroot.join_info_list == NIL);
 		/* and we haven't created PlaceHolderInfos, either */
@@ -2679,7 +2686,8 @@ choose_hashed_distinct(PlannerInfo *root,
  * 'groupColIdx' receives an array of column numbers for the GROUP BY
  *			expressions (if there are any) in the returned target list.
  * 'need_tlist_eval' is set true if we really need to evaluate the
- *			returned tlist as-is.
+ *			returned tlist as-is.  (Note: locate_grouping_columns assumes
+ *			that if this is FALSE, all grouping columns are simple Vars.)
  *
  * The result is the targetlist to be passed to query_planner.
  */
@@ -2842,6 +2850,7 @@ get_grouping_column_index(Query *parse, TargetEntry *tle)
  * This is only needed if we don't use the sub_tlist chosen by
  * make_subplanTargetList.	We have to forget the column indexes found
  * by that routine and re-locate the grouping exprs in the real sub_tlist.
+ * We assume the grouping exprs are just Vars (see make_subplanTargetList).
  */
 static void
 locate_grouping_columns(PlannerInfo *root,
@@ -2865,11 +2874,24 @@ locate_grouping_columns(PlannerInfo *root,
 	foreach(gl, root->parse->groupClause)
 	{
 		SortGroupClause *grpcl = (SortGroupClause *) lfirst(gl);
-		Node	   *groupexpr = get_sortgroupclause_expr(grpcl, tlist);
-		TargetEntry *te = tlist_member(groupexpr, sub_tlist);
+		Var		   *groupexpr = (Var *) get_sortgroupclause_expr(grpcl, tlist);
+		TargetEntry *te;
 
+		/*
+		 * The grouping column returned by create_plan might not have the same
+		 * typmod as the original Var.	(This can happen in cases where a
+		 * set-returning function has been inlined, so that we now have more
+		 * knowledge about what it returns than we did when the original Var
+		 * was created.)  So we can't use tlist_member() to search the tlist;
+		 * instead use tlist_member_match_var.	For safety, still check that
+		 * the vartype matches.
+		 */
+		if (!(groupexpr && IsA(groupexpr, Var)))
+			elog(ERROR, "grouping column is not a Var as expected");
+		te = tlist_member_match_var(groupexpr, sub_tlist);
 		if (!te)
 			elog(ERROR, "failed to locate grouping columns");
+		Assert(((Var *) te->expr)->vartype == groupexpr->vartype);
 		groupColIdx[keyno++] = te->resno;
 	}
 }

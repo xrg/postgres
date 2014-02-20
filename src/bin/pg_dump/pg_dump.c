@@ -12595,7 +12595,8 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		 * attislocal correctly, plus fix up any inherited CHECK constraints.
 		 * Analogously, we set up typed tables using ALTER TABLE / OF here.
 		 */
-		if (binary_upgrade && tbinfo->relkind == RELKIND_RELATION)
+		if (binary_upgrade && (tbinfo->relkind == RELKIND_RELATION || 
+							   tbinfo->relkind == RELKIND_FOREIGN_TABLE) )
 		{
 			for (j = 0; j < tbinfo->numatts; j++)
 			{
@@ -12613,8 +12614,13 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 					appendStringLiteralAH(q, fmtId(tbinfo->dobj.name), fout);
 					appendPQExpBuffer(q, "::pg_catalog.regclass;\n");
 
-					appendPQExpBuffer(q, "ALTER TABLE ONLY %s ",
-									  fmtId(tbinfo->dobj.name));
+					if (tbinfo->relkind == RELKIND_RELATION)
+						appendPQExpBuffer(q, "ALTER TABLE ONLY %s ",
+										  fmtId(tbinfo->dobj.name));
+					else
+						appendPQExpBuffer(q, "ALTER FOREIGN TABLE %s ",
+										  fmtId(tbinfo->dobj.name));
+						
 					appendPQExpBuffer(q, "DROP COLUMN %s;\n",
 									  fmtId(tbinfo->attnames[j]));
 				}
@@ -12936,6 +12942,7 @@ static void
 dumpIndex(Archive *fout, IndxInfo *indxinfo)
 {
 	TableInfo  *tbinfo = indxinfo->indextable;
+	bool		is_constraint = (indxinfo->indexconstraint != 0);
 	PQExpBuffer q;
 	PQExpBuffer delq;
 	PQExpBuffer labelq;
@@ -12953,9 +12960,11 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 	/*
 	 * If there's an associated constraint, don't dump the index per se, but
 	 * do dump any comment for it.	(This is safe because dependency ordering
-	 * will have ensured the constraint is emitted first.)
+	 * will have ensured the constraint is emitted first.)  Note that the
+	 * emitted comment has to be shown as depending on the constraint, not
+	 * the index, in such cases.
 	 */
-	if (indxinfo->indexconstraint == 0)
+	if (!is_constraint)
 	{
 		if (binary_upgrade)
 			binary_upgrade_set_pg_class_oids(fout, q,
@@ -12997,7 +13006,9 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 	dumpComment(fout, labelq->data,
 				tbinfo->dobj.namespace->dobj.name,
 				tbinfo->rolname,
-				indxinfo->dobj.catId, 0, indxinfo->dobj.dumpId);
+				indxinfo->dobj.catId, 0,
+				is_constraint ? indxinfo->indexconstraint :
+				indxinfo->dobj.dumpId);
 
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);
