@@ -69,8 +69,7 @@ start(){
 	# Check for postmaster already running...
   # note that pg_ctl only looks at the data structures in PGDATA
   # you really do need the pidof()
-	pid=`pidof -s /usr/bin/postmaster`
-	if [ $pid ] && /usr/bin/pg_ctl -l ${LOGFILE} status -D $PGDATA > /dev/null 2>&1
+	if pidof -s /usr/bin/postmaster > /dev/null 2>&1
 	then
 		gprintf "Postmaster already running.\n"
 	else
