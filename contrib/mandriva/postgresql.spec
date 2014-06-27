@@ -1,6 +1,6 @@
 %define git_repo postgresql
 %define git_head HEAD
-%global release_class experimental
+%global release_class pub
 
 %if %_lib == lib64
 %define _requires_exceptions devel(libtcl8.4(64bit))
