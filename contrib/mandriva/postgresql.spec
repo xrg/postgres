@@ -583,6 +583,9 @@ exit 1
 %{_libdir}/postgresql/tcn.so
 %{_libdir}/postgresql/postgres_fdw.so
 %{_libdir}/postgresql/worker_spi.so
+%{_libdir}/postgresql/pg_prewarm.so
+%{_libdir}/postgresql/test_decoding.so
+%{_libdir}/postgresql/test_shm_mq.so
 
 %{_bindir}/oid2name
 %{_bindir}/pgbench
@@ -617,12 +620,14 @@ exit 1
 %{_bindir}/pg_archivecleanup
 %{_bindir}/pg_upgrade
 %{_bindir}/pg_basebackup
+%{_bindir}/pg_recvlogical
 %{_bindir}/pg_receivexlog
 %{_bindir}/pg_test_fsync
 %{_mandir}/man1/initdb.1*
 %{_mandir}/man1/pg_archivecleanup.1*
 %{_mandir}/man1/pg_controldata.*
 %{_mandir}/man1/pg_ctl.1*
+%{_mandir}/man1/pg_recvlogical.1*
 %{_mandir}/man1/pg_receivexlog.1*
 %{_mandir}/man1/pg_standby.1*
 %{_mandir}/man1/pg_resetxlog.*
