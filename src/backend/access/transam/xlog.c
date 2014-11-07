@@ -5334,7 +5334,7 @@ static void
 exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 {
 	char		recoveryPath[MAXPGPATH];
-	char		xlogpath[MAXPGPATH];
+	char		xlogfname[MAXFNAMELEN];
 
 	/*
 	 * We are no longer in archive recovery state.
@@ -5362,17 +5362,19 @@ exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 	 * for the new timeline.
 	 *
 	 * Notify the archiver that the last WAL segment of the old timeline is
-	 * ready to copy to archival storage. Otherwise, it is not archived for a
-	 * while.
+	 * ready to copy to archival storage if its .done file doesn't exist
+	 * (e.g., if it's the restored WAL file, it's expected to have .done file).
+	 * Otherwise, it is not archived for a while.
 	 */
 	if (endTLI != ThisTimeLineID)
 	{
 		XLogFileCopy(endLogSegNo, endTLI, endLogSegNo);
 
+		/* Create .ready file only when neither .ready nor .done files exist */
 		if (XLogArchivingActive())
 		{
-			XLogFileName(xlogpath, endTLI, endLogSegNo);
-			XLogArchiveNotify(xlogpath);
+			XLogFileName(xlogfname, endTLI, endLogSegNo);
+			XLogArchiveCheckDone(xlogfname);
 		}
 	}
 
@@ -5380,8 +5382,8 @@ exitArchiveRecovery(TimeLineID endTLI, XLogSegNo endLogSegNo)
 	 * Let's just make real sure there are not .ready or .done flags posted
 	 * for the new segment.
 	 */
-	XLogFileName(xlogpath, ThisTimeLineID, endLogSegNo);
-	XLogArchiveCleanup(xlogpath);
+	XLogFileName(xlogfname, ThisTimeLineID, endLogSegNo);
+	XLogArchiveCleanup(xlogfname);
 
 	/*
 	 * Since there might be a partial WAL segment named RECOVERYXLOG, get rid
@@ -7824,9 +7826,9 @@ LogCheckpointStart(int flags, bool restartpoint)
 	 * the main message, but what about all the flags?
 	 */
 	if (restartpoint)
-		msg = "restartpoint starting:%s%s%s%s%s%s%s";
+		msg = "restartpoint starting:%s%s%s%s%s%s%s%s";
 	else
-		msg = "checkpoint starting:%s%s%s%s%s%s%s";
+		msg = "checkpoint starting:%s%s%s%s%s%s%s%s";
 
 	elog(LOG, msg,
 		 (flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
@@ -7835,7 +7837,8 @@ LogCheckpointStart(int flags, bool restartpoint)
 		 (flags & CHECKPOINT_FORCE) ? " force" : "",
 		 (flags & CHECKPOINT_WAIT) ? " wait" : "",
 		 (flags & CHECKPOINT_CAUSE_XLOG) ? " xlog" : "",
-		 (flags & CHECKPOINT_CAUSE_TIME) ? " time" : "");
+		 (flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
+		 (flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" :"");
 }
 
 /*
