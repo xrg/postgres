@@ -656,9 +656,12 @@ ProcessStandbyHSFeedbackMessage(void)
 		 reply.xmin,
 		 reply.epoch);
 
-	/* Ignore invalid xmin (can't actually happen with current walreceiver) */
+	/* Unset WalSender's xmin if the feedback message value is invalid */
 	if (!TransactionIdIsNormal(reply.xmin))
+	{
+		MyPgXact->xmin = InvalidTransactionId;
 		return;
+	}
 
 	/*
 	 * Check that the provided xmin/epoch are sane, that is, not in the future
@@ -695,7 +698,7 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * far enough to make reply.xmin wrap around.  In that case the xmin we
 	 * set here would be "in the future" and have no effect.  No point in
 	 * worrying about this since it's too late to save the desired data
-	 * anyway.	Assuming that the standby sends us an increasing sequence of
+	 * anyway.  Assuming that the standby sends us an increasing sequence of
 	 * xmins, this could only happen during the first reply cycle, else our
 	 * own xmin would prevent nextXid from advancing so far.
 	 *
@@ -808,9 +811,20 @@ WalSndLoop(void)
 			 */
 			if (walsender_ready_to_stop)
 			{
+				XLogRecPtr	replicatedPtr;
+
 				/* ... let's just be real sure we're caught up ... */
 				XLogSend(output_message, &caughtup);
-				if (caughtup && XLByteEQ(sentPtr, MyWalSnd->flush) &&
+
+				/*
+				 * Check a write location to see whether all the WAL have
+				 * successfully been replicated if this walsender is connecting
+				 * to a standby such as pg_receivexlog which always returns
+				 * an invalid flush location. Otherwise, check a flush location.
+				 */
+				replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
+					MyWalSnd->write : MyWalSnd->flush;
+				if (caughtup && XLByteEQ(sentPtr, replicatedPtr) &&
 					!pq_is_send_pending())
 				{
 					walsender_shutdown_requested = true;
@@ -1346,7 +1360,7 @@ WalSndQuickDieHandler(SIGNAL_ARGS)
 	on_exit_reset();
 
 	/*
-	 * Note we do exit(2) not exit(0).	This is to force the postmaster into a
+	 * Note we do exit(2) not exit(0).  This is to force the postmaster into a
 	 * system reset cycle if some idiot DBA sends a manual SIGQUIT to a random
 	 * backend.  This is necessary precisely because we don't clean up our
 	 * shared memory state.  (The "dead man switch" mechanism in pmsignal.c

@@ -31,7 +31,7 @@
 /*
  * We have to use postgres.h not postgres_fe.h here, because there's so much
  * backend-only stuff in the XLOG include files we need.  But we need a
- * frontend-ish environment otherwise.	Hence this ugly hack.
+ * frontend-ish environment otherwise.  Hence this ugly hack.
  */
 #define FRONTEND 1
 
@@ -729,7 +729,7 @@ FindEndOfXLOG(void)
 
 	/*
 	 * Initialize the max() computation using the last checkpoint address from
-	 * old pg_control.	Note that for the moment we are working with segment
+	 * old pg_control.  Note that for the moment we are working with segment
 	 * numbering according to the old xlog seg size.
 	 */
 	newXlogId = ControlFile.checkPointCopy.redo.xlogid;
@@ -748,8 +748,7 @@ FindEndOfXLOG(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strlen(xlde->d_name) == 24 &&
 			strspn(xlde->d_name, "0123456789ABCDEF") == 24)
@@ -773,25 +772,27 @@ FindEndOfXLOG(void)
 				newXlogSeg = seg;
 			}
 		}
-		errno = 0;
 	}
-#ifdef WIN32
 
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
+#ifdef WIN32
+	/* Bug in old Mingw dirent.c;  fixed in mingw-runtime-3.2, 2003-10-10 */
 	if (GetLastError() == ERROR_NO_MORE_FILES)
 		errno = 0;
 #endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, XLOGDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, XLOGDIR, strerror(errno));
+		exit(1);
+	}
 
 	/*
 	 * Finally, convert to new xlog seg size, and advance by one to ensure we
@@ -823,8 +824,7 @@ KillExistingXLOG(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strlen(xlde->d_name) == 24 &&
 			strspn(xlde->d_name, "0123456789ABCDEF") == 24)
@@ -837,25 +837,27 @@ KillExistingXLOG(void)
 				exit(1);
 			}
 		}
-		errno = 0;
 	}
-#ifdef WIN32
 
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
+#ifdef WIN32
+	/* Bug in old Mingw dirent.c;  fixed in mingw-runtime-3.2, 2003-10-10 */
 	if (GetLastError() == ERROR_NO_MORE_FILES)
 		errno = 0;
 #endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, XLOGDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, XLOGDIR, strerror(errno));
+		exit(1);
+	}
 }
 
 
@@ -879,8 +881,7 @@ KillExistingArchiveStatus(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strspn(xlde->d_name, "0123456789ABCDEF") == 24 &&
 			(strcmp(xlde->d_name + 24, ".ready") == 0 ||
@@ -894,25 +895,27 @@ KillExistingArchiveStatus(void)
 				exit(1);
 			}
 		}
-		errno = 0;
 	}
-#ifdef WIN32
 
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
+#ifdef WIN32
+	/* Bug in old Mingw dirent.c;  fixed in mingw-runtime-3.2, 2003-10-10 */
 	if (GetLastError() == ERROR_NO_MORE_FILES)
 		errno = 0;
 #endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, ARCHSTATDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, ARCHSTATDIR, strerror(errno));
+		exit(1);
+	}
 }
 
 
