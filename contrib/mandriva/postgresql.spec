@@ -39,7 +39,7 @@ Source0:	%git_bs_source %{name}-%{version}.tar.gz
 Requires:	perl
 Provides:	postgresql-clients = %{version}-%{release}
 Conflicts:	postgresql-clients < %{version}-%{release}
-BuildRequires:	X11-devel
+# BuildRequires:	X11-devel
 BuildRequires: bison flex
 BuildRequires: gettext
 BuildRequires: termcap-devel
