@@ -151,6 +151,7 @@ typedef struct CopyStateData
 	int		   *defmap;			/* array of default att numbers */
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;		/* is any of defexprs volatile? */
+	List	   *range_table;
 
 	/*
 	 * These variables are used to reduce overhead in textual COPY FROM.
@@ -394,6 +395,8 @@ ReceiveCopyBegin(CopyState cstate)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			errmsg("COPY BINARY is not supported to stdout or from stdin")));
 		pq_putemptymessage('G');
+		/* any error in old protocol will make us lose sync */
+		pq_startmsgread();
 		cstate->copy_dest = COPY_OLD_FE;
 	}
 	else
@@ -404,6 +407,8 @@ ReceiveCopyBegin(CopyState cstate)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 			errmsg("COPY BINARY is not supported to stdout or from stdin")));
 		pq_putemptymessage('D');
+		/* any error in old protocol will make us lose sync */
+		pq_startmsgread();
 		cstate->copy_dest = COPY_OLD_FE;
 	}
 	/* We *must* flush here to ensure FE knows it can send. */
@@ -564,6 +569,8 @@ CopyGetData(CopyState cstate, void *databuf, int minread, int maxread)
 					int			mtype;
 
 			readmessage:
+					HOLD_CANCEL_INTERRUPTS();
+					pq_startmsgread();
 					mtype = pq_getbyte();
 					if (mtype == EOF)
 						ereport(ERROR,
@@ -573,6 +580,7 @@ CopyGetData(CopyState cstate, void *databuf, int minread, int maxread)
 						ereport(ERROR,
 								(errcode(ERRCODE_CONNECTION_FAILURE),
 								 errmsg("unexpected EOF on client connection with an open transaction")));
+					RESUME_CANCEL_INTERRUPTS();
 					switch (mtype)
 					{
 						case 'd':		/* CopyData */
@@ -747,6 +755,7 @@ DoCopy(const CopyStmt *stmt, const char *queryString)
 	bool		pipe = (stmt->filename == NULL);
 	Relation	rel;
 	uint64		processed;
+	List	   *range_table = NIL;
 
 	/* Disallow file COPY except to superusers. */
 	if (!pipe && !superuser())
@@ -760,9 +769,9 @@ DoCopy(const CopyStmt *stmt, const char *queryString)
 	{
 		TupleDesc	tupDesc;
 		AclMode		required_access = (is_from ? ACL_INSERT : ACL_SELECT);
-		RangeTblEntry *rte;
 		List	   *attnums;
 		ListCell   *cur;
+		RangeTblEntry *rte;
 
 		Assert(!stmt->query);
 
@@ -775,6 +784,7 @@ DoCopy(const CopyStmt *stmt, const char *queryString)
 		rte->relid = RelationGetRelid(rel);
 		rte->relkind = rel->rd_rel->relkind;
 		rte->requiredPerms = required_access;
+		range_table = list_make1(rte);
 
 		tupDesc = RelationGetDescr(rel);
 		attnums = CopyGetAttnums(tupDesc, rel, stmt->attlist);
@@ -788,7 +798,7 @@ DoCopy(const CopyStmt *stmt, const char *queryString)
 			else
 				rte->selectedCols = bms_add_member(rte->selectedCols, attno);
 		}
-		ExecCheckRTPerms(list_make1(rte), true);
+		ExecCheckRTPerms(range_table, true);
 	}
 	else
 	{
@@ -807,6 +817,7 @@ DoCopy(const CopyStmt *stmt, const char *queryString)
 
 		cstate = BeginCopyFrom(rel, stmt->filename,
 							   stmt->attlist, stmt->options);
+		cstate->range_table = range_table;
 		processed = CopyFrom(cstate);	/* copy from file to database */
 		EndCopyFrom(cstate);
 	}
@@ -1957,6 +1968,7 @@ CopyFrom(CopyState cstate)
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;
 	estate->es_result_relation_info = resultRelInfo;
+	estate->es_range_table = cstate->range_table;
 
 	/* Set up a tuple slot too */
 	myslot = ExecInitExtraTupleSlot(estate);
@@ -2131,6 +2143,13 @@ CopyFrom(CopyState cstate)
 	FreeBulkInsertState(bistate);
 
 	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * In the old protocol, tell pqcomm that we can process normal protocol
+	 * messages again.
+	 */
+	if (cstate->copy_dest == COPY_OLD_FE)
+		pq_endmsgread();
 
 	/* Execute AFTER STATEMENT insertion triggers */
 	ExecASInsertTriggers(estate, resultRelInfo);
