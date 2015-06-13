@@ -69,7 +69,7 @@
  * Note: because both MultiXactOffsets and TransactionIds are 32 bits and
  * wrap around at 0xFFFFFFFF, MultiXact page numbering also wraps around at
  * 0xFFFFFFFF/MULTIXACT_*_PER_PAGE, and segment numbering at
- * 0xFFFFFFFF/MULTIXACT_*_PER_PAGE/SLRU_SEGMENTS_PER_PAGE.  We need take no
+ * 0xFFFFFFFF/MULTIXACT_*_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need take no
  * explicit notice of that fact in this module, except when comparing segment
  * and page numbers in TruncateMultiXact
  * (see MultiXact{Offset,Member}PagePrecedes).
@@ -381,6 +381,21 @@ MultiXactIdIsRunning(MultiXactId multi)
 	int			i;
 
 	debug_elog3(DEBUG2, "IsRunning %u?", multi);
+
+	/*
+	 * During recovery, all multixacts can be considered not running: in
+	 * effect, tuple locks are not held in standby servers, which is fine
+	 * because the standby cannot acquire further tuple locks nor update/delete
+	 * tuples.
+	 *
+	 * We need to do this first, because GetMultiXactIdMembers complains if
+	 * called on recovery.
+	 */
+	if (RecoveryInProgress())
+	{
+		debug_elog2(DEBUG2, "IsRunning: in recovery");
+		return false;
+	}
 
 	nmembers = GetMultiXactIdMembers(multi, &members);
 
