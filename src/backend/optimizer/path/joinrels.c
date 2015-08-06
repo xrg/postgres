@@ -467,20 +467,30 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		}
 		else
 		{
+			/*
+			 * Otherwise, the proposed join overlaps the RHS but isn't a valid
+			 * implementation of this SJ.  It might still be a legal join,
+			 * however, if it does not overlap the LHS.  But we never allow
+			 * violations of the RHS of SEMI or ANTI joins.  (In practice,
+			 * therefore, only LEFT joins ever allow RHS violation.)
+			 */
+			if (sjinfo->jointype == JOIN_SEMI ||
+				sjinfo->jointype == JOIN_ANTI ||
+				bms_overlap(joinrelids, sjinfo->min_lefthand))
+				return false;	/* invalid join path */
+
 			/*----------
-			 * Otherwise, the proposed join overlaps the RHS but isn't
-			 * a valid implementation of this SJ.  It might still be
-			 * a legal join, however.  If both inputs overlap the RHS,
-			 * assume that it's OK.  Since the inputs presumably got past
-			 * this function's checks previously, they can't overlap the
-			 * LHS and their violations of the RHS boundary must represent
-			 * SJs that have been determined to commute with this one.
+			 * If both inputs overlap the RHS, assume that it's OK.  Since the
+			 * inputs presumably got past this function's checks previously,
+			 * their violations of the RHS boundary must represent SJs that
+			 * have been determined to commute with this one.
 			 * We have to allow this to work correctly in cases like
 			 *		(a LEFT JOIN (b JOIN (c LEFT JOIN d)))
 			 * when the c/d join has been determined to commute with the join
 			 * to a, and hence d is not part of min_righthand for the upper
 			 * join.  It should be legal to join b to c/d but this will appear
 			 * as a violation of the upper join's RHS.
+			 *
 			 * Furthermore, if one input overlaps the RHS and the other does
 			 * not, we should still allow the join if it is a valid
 			 * implementation of some other SJ.  We have to allow this to
@@ -492,15 +502,16 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			 * Set flag here to check at bottom of loop.
 			 *----------
 			 */
-			if (sjinfo->jointype != JOIN_SEMI &&
-				bms_overlap(rel1->relids, sjinfo->min_righthand) &&
+			if (bms_overlap(rel1->relids, sjinfo->min_righthand) &&
 				bms_overlap(rel2->relids, sjinfo->min_righthand))
 			{
-				/* seems OK */
-				Assert(!bms_overlap(joinrelids, sjinfo->min_lefthand));
+				/* both overlap; assume OK */
 			}
 			else
+			{
+				/* one overlaps, the other doesn't */
 				is_valid_inner = false;
+			}
 		}
 	}
 
@@ -536,7 +547,9 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			if (!bms_is_subset(ljinfo->lateral_lhs, rel1->relids))
 				return false;	/* rel1 can't compute the required parameter */
 			if (match_sjinfo &&
-				(reversed || match_sjinfo->jointype == JOIN_FULL))
+				(reversed ||
+				 unique_ified ||
+				 match_sjinfo->jointype == JOIN_FULL))
 				return false;	/* not implementable as nestloop */
 		}
 		if (bms_is_subset(ljinfo->lateral_rhs, rel1->relids) &&
@@ -549,7 +562,9 @@ join_is_legal(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 			if (!bms_is_subset(ljinfo->lateral_lhs, rel2->relids))
 				return false;	/* rel2 can't compute the required parameter */
 			if (match_sjinfo &&
-				(!reversed || match_sjinfo->jointype == JOIN_FULL))
+				(!reversed ||
+				 unique_ified ||
+				 match_sjinfo->jointype == JOIN_FULL))
 				return false;	/* not implementable as nestloop */
 		}
 	}

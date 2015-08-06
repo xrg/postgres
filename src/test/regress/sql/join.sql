@@ -353,6 +353,44 @@ select count(*) from tenk1 x where
   x.unique1 in (select aa.f1 from int4_tbl aa,float8_tbl bb where aa.f1=bb.f1);
 rollback;
 
+--
+-- regression test: be sure we cope with proven-dummy append rels
+--
+explain (costs off)
+select aa, bb, unique1, unique1
+  from tenk1 right join b on aa = unique1
+  where bb < bb and bb is null;
+
+select aa, bb, unique1, unique1
+  from tenk1 right join b on aa = unique1
+  where bb < bb and bb is null;
+
+--
+-- regression test: check a case where join_clause_is_movable_into() gives
+-- an imprecise result
+--
+analyze pg_enum;
+explain (costs off)
+select anname, outname, enumtypid
+from
+  (select pa.proname as anname, coalesce(po.proname, typname) as outname
+   from pg_type t
+     left join pg_proc po on po.oid = t.typoutput
+     join pg_proc pa on pa.oid = t.typanalyze) ss,
+  pg_enum,
+  pg_type t2
+where anname = enumlabel and outname = t2.typname and enumtypid = t2.oid;
+
+select anname, outname, enumtypid
+from
+  (select pa.proname as anname, coalesce(po.proname, typname) as outname
+   from pg_type t
+     left join pg_proc po on po.oid = t.typoutput
+     join pg_proc pa on pa.oid = t.typanalyze) ss,
+  pg_enum,
+  pg_type t2
+where anname = enumlabel and outname = t2.typname and enumtypid = t2.oid;
+
 
 --
 -- Clean up
@@ -790,6 +828,37 @@ select * from
 where thousand = a.q1 and tenthous = b.q1 and a.q2 = 1 and b.q2 = 2;
 
 --
+-- test a corner case in which we shouldn't apply the star-schema optimization
+--
+
+explain (costs off)
+select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
+  tenk1 t1
+  inner join int4_tbl i1
+    left join (select v1.x2, v2.y1, 11 AS d1
+               from (values(1,0)) v1(x1,x2)
+               left join (values(3,1)) v2(y1,y2)
+               on v1.x1 = v2.y2) subq1
+    on (i1.f1 = subq1.x2)
+  on (t1.unique2 = subq1.d1)
+  left join tenk1 t2
+  on (subq1.y1 = t2.unique1)
+where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
+
+select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
+  tenk1 t1
+  inner join int4_tbl i1
+    left join (select v1.x2, v2.y1, 11 AS d1
+               from (values(1,0)) v1(x1,x2)
+               left join (values(3,1)) v2(y1,y2)
+               on v1.x1 = v2.y2) subq1
+    on (i1.f1 = subq1.x2)
+  on (t1.unique2 = subq1.d1)
+  left join tenk1 t2
+  on (subq1.y1 = t2.unique1)
+where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
+
+--
 -- test extraction of restriction OR clauses from join OR clause
 -- (we used to only do this for indexable clauses)
 --
@@ -929,6 +998,56 @@ left join
    using (join_key)
   ) foo3
 using (join_key);
+
+--
+-- test successful handling of nested outer joins with degenerate join quals
+--
+
+explain (verbose, costs off)
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+
+explain (verbose, costs off)
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2, int4_tbl i4b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2, int4_tbl i4b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
 
 --
 -- test ability to push constants through outer join clauses
@@ -1247,6 +1366,19 @@ select * from
   left join lateral (
     select * from (select 3 as z) z where z.z = x.x
   ) zz on zz.z = y.y;
+
+-- check we don't try to do a unique-ified semijoin with LATERAL
+explain (verbose, costs off)
+select * from
+  (values (0,9998), (1,1000)) v(id,x),
+  lateral (select f1 from int4_tbl
+           where f1 = any (select unique1 from tenk1
+                           where unique2 = v.x offset 0)) ss;
+select * from
+  (values (0,9998), (1,1000)) v(id,x),
+  lateral (select f1 from int4_tbl
+           where f1 = any (select unique1 from tenk1
+                           where unique2 = v.x offset 0)) ss;
 
 -- test some error cases where LATERAL should have been used but wasn't
 select f1,g from int4_tbl a, (select f1 as g) ss;

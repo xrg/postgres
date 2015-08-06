@@ -2096,7 +2096,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XBLOCKS
 		},
 		&XLOGbuffers,
-		-1, -1, INT_MAX,
+		-1, -1, (INT_MAX / XLOG_BLCKSZ),
 		check_wal_buffers, NULL, NULL
 	},
 
@@ -2457,7 +2457,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB,
 		},
 		&ssl_renegotiation_limit,
-		512 * 1024, 0, MAX_KILOBYTES,
+		0, 0, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
 
@@ -6620,6 +6620,7 @@ replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 	item->value = pstrdup(value);
 	item->filename = pstrdup("");		/* new item has no location */
 	item->sourceline = 0;
+	item->ignore = false;
 	item->next = NULL;
 
 	if (*head_p == NULL)
@@ -6767,7 +6768,10 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 								AutoConfFileName)));
 
 			/* parse it */
-			ParseConfigFp(infile, AutoConfFileName, 0, LOG, &head, &tail);
+			if (!ParseConfigFp(infile, AutoConfFileName, 0, LOG, &head, &tail))
+				ereport(ERROR,
+						(errmsg("could not parse contents of file \"%s\"",
+								AutoConfFileName)));
 
 			FreeFile(infile);
 		}

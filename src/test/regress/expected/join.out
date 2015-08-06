@@ -2165,6 +2165,74 @@ select count(*) from tenk1 x where
 
 rollback;
 --
+-- regression test: be sure we cope with proven-dummy append rels
+--
+explain (costs off)
+select aa, bb, unique1, unique1
+  from tenk1 right join b on aa = unique1
+  where bb < bb and bb is null;
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+select aa, bb, unique1, unique1
+  from tenk1 right join b on aa = unique1
+  where bb < bb and bb is null;
+ aa | bb | unique1 | unique1 
+----+----+---------+---------
+(0 rows)
+
+--
+-- regression test: check a case where join_clause_is_movable_into() gives
+-- an imprecise result
+--
+analyze pg_enum;
+explain (costs off)
+select anname, outname, enumtypid
+from
+  (select pa.proname as anname, coalesce(po.proname, typname) as outname
+   from pg_type t
+     left join pg_proc po on po.oid = t.typoutput
+     join pg_proc pa on pa.oid = t.typanalyze) ss,
+  pg_enum,
+  pg_type t2
+where anname = enumlabel and outname = t2.typname and enumtypid = t2.oid;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Nested Loop
+   Join Filter: (pg_enum.enumtypid = t2.oid)
+   ->  Nested Loop Left Join
+         ->  Hash Join
+               Hash Cond: ((t.typanalyze)::oid = pa.oid)
+               ->  Seq Scan on pg_type t
+               ->  Hash
+                     ->  Hash Join
+                           Hash Cond: (pa.proname = pg_enum.enumlabel)
+                           ->  Seq Scan on pg_proc pa
+                           ->  Hash
+                                 ->  Seq Scan on pg_enum
+         ->  Index Scan using pg_proc_oid_index on pg_proc po
+               Index Cond: (oid = (t.typoutput)::oid)
+   ->  Index Scan using pg_type_typname_nsp_index on pg_type t2
+         Index Cond: (typname = COALESCE(po.proname, t.typname))
+(16 rows)
+
+select anname, outname, enumtypid
+from
+  (select pa.proname as anname, coalesce(po.proname, typname) as outname
+   from pg_type t
+     left join pg_proc po on po.oid = t.typoutput
+     join pg_proc pa on pa.oid = t.typanalyze) ss,
+  pg_enum,
+  pg_type t2
+where anname = enumlabel and outname = t2.typname and enumtypid = t2.oid;
+ anname | outname | enumtypid 
+--------+---------+-----------
+(0 rows)
+
+--
 -- Clean up
 --
 DROP TABLE t1;
@@ -2842,6 +2910,57 @@ where thousand = a.q1 and tenthous = b.q1 and a.q2 = 1 and b.q2 = 2;
 (8 rows)
 
 --
+-- test a corner case in which we shouldn't apply the star-schema optimization
+--
+explain (costs off)
+select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
+  tenk1 t1
+  inner join int4_tbl i1
+    left join (select v1.x2, v2.y1, 11 AS d1
+               from (values(1,0)) v1(x1,x2)
+               left join (values(3,1)) v2(y1,y2)
+               on v1.x1 = v2.y2) subq1
+    on (i1.f1 = subq1.x2)
+  on (t1.unique2 = subq1.d1)
+  left join tenk1 t2
+  on (subq1.y1 = t2.unique1)
+where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Nested Loop
+   Join Filter: (t1.stringu1 > t2.stringu2)
+   ->  Nested Loop
+         Join Filter: ("*VALUES*".column2 = i1.f1)
+         ->  Nested Loop
+               ->  Nested Loop
+                     Join Filter: ("*VALUES*".column1 = "*VALUES*_1".column2)
+                     ->  Values Scan on "*VALUES*"
+                     ->  Values Scan on "*VALUES*_1"
+               ->  Index Scan using tenk1_unique2 on tenk1 t1
+                     Index Cond: ((unique2 = (11)) AND (unique2 < 42))
+         ->  Seq Scan on int4_tbl i1
+   ->  Index Scan using tenk1_unique1 on tenk1 t2
+         Index Cond: (unique1 = "*VALUES*_1".column1)
+(14 rows)
+
+select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
+  tenk1 t1
+  inner join int4_tbl i1
+    left join (select v1.x2, v2.y1, 11 AS d1
+               from (values(1,0)) v1(x1,x2)
+               left join (values(3,1)) v2(y1,y2)
+               on v1.x1 = v2.y2) subq1
+    on (i1.f1 = subq1.x2)
+  on (t1.unique2 = subq1.d1)
+  left join tenk1 t2
+  on (subq1.y1 = t2.unique1)
+where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
+ unique2 | stringu1 | unique1 | stringu2 
+---------+----------+---------+----------
+      11 | WFAAAA   |       3 | LKIAAA
+(1 row)
+
+--
 -- test extraction of restriction OR clauses from join OR clause
 -- (we used to only do this for indexable clauses)
 --
@@ -3183,6 +3302,135 @@ using (join_key);
 ---------+---------+-----------
        0 |       0 |       666
        1 |         |          
+(2 rows)
+
+--
+-- test successful handling of nested outer joins with degenerate join quals
+--
+explain (verbose, costs off)
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Hash Left Join
+   Output: t1.f1
+   Hash Cond: (i8.q2 = i4.f1)
+   ->  Nested Loop Left Join
+         Output: t1.f1, i8.q2
+         Join Filter: (t1.f1 = '***'::text)
+         ->  Seq Scan on public.text_tbl t1
+               Output: t1.f1
+         ->  Materialize
+               Output: i8.q2
+               ->  Hash Right Join
+                     Output: i8.q2
+                     Hash Cond: ((NULL::integer) = i8b1.q2)
+                     ->  Hash Left Join
+                           Output: i8.q2, (NULL::integer)
+                           Hash Cond: (i8.q1 = i8b2.q1)
+                           ->  Seq Scan on public.int8_tbl i8
+                                 Output: i8.q1, i8.q2
+                           ->  Hash
+                                 Output: i8b2.q1, (NULL::integer)
+                                 ->  Seq Scan on public.int8_tbl i8b2
+                                       Output: i8b2.q1, NULL::integer
+                     ->  Hash
+                           Output: i8b1.q2
+                           ->  Seq Scan on public.int8_tbl i8b1
+                                 Output: i8b1.q2
+   ->  Hash
+         Output: i4.f1
+         ->  Seq Scan on public.int4_tbl i4
+               Output: i4.f1
+(30 rows)
+
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+        f1         
+-------------------
+ doh!
+ hi de ho neighbor
+(2 rows)
+
+explain (verbose, costs off)
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2, int4_tbl i4b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Hash Left Join
+   Output: t1.f1
+   Hash Cond: (i8.q2 = i4.f1)
+   ->  Nested Loop Left Join
+         Output: i8.q2, t1.f1
+         Join Filter: (t1.f1 = '***'::text)
+         ->  Seq Scan on public.text_tbl t1
+               Output: t1.f1
+         ->  Materialize
+               Output: i8.q2
+               ->  Hash Right Join
+                     Output: i8.q2
+                     Hash Cond: ((NULL::integer) = i8b1.q2)
+                     ->  Hash Right Join
+                           Output: i8.q2, (NULL::integer)
+                           Hash Cond: (i8b2.q1 = i8.q1)
+                           ->  Nested Loop
+                                 Output: i8b2.q1, NULL::integer
+                                 ->  Seq Scan on public.int8_tbl i8b2
+                                       Output: i8b2.q1, i8b2.q2
+                                 ->  Materialize
+                                       ->  Seq Scan on public.int4_tbl i4b2
+                           ->  Hash
+                                 Output: i8.q1, i8.q2
+                                 ->  Seq Scan on public.int8_tbl i8
+                                       Output: i8.q1, i8.q2
+                     ->  Hash
+                           Output: i8b1.q2
+                           ->  Seq Scan on public.int8_tbl i8b1
+                                 Output: i8b1.q2
+   ->  Hash
+         Output: i4.f1
+         ->  Seq Scan on public.int4_tbl i4
+               Output: i4.f1
+(34 rows)
+
+select t1.* from
+  text_tbl t1
+  left join (select *, '***'::text as d1 from int8_tbl i8b1) b1
+    left join int8_tbl i8
+      left join (select *, null::int as d2 from int8_tbl i8b2, int4_tbl i4b2) b2
+      on (i8.q1 = b2.q1)
+    on (b2.d2 = b1.q2)
+  on (t1.f1 = b1.d1)
+  left join int4_tbl i4
+  on (i8.q2 = i4.f1);
+        f1         
+-------------------
+ doh!
+ hi de ho neighbor
 (2 rows)
 
 --
@@ -4287,6 +4535,41 @@ select * from
    ->  Result
          Output: 3
 (11 rows)
+
+-- check we don't try to do a unique-ified semijoin with LATERAL
+explain (verbose, costs off)
+select * from
+  (values (0,9998), (1,1000)) v(id,x),
+  lateral (select f1 from int4_tbl
+           where f1 = any (select unique1 from tenk1
+                           where unique2 = v.x offset 0)) ss;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Nested Loop
+   Output: "*VALUES*".column1, "*VALUES*".column2, int4_tbl.f1
+   ->  Values Scan on "*VALUES*"
+         Output: "*VALUES*".column1, "*VALUES*".column2
+   ->  Hash Semi Join
+         Output: int4_tbl.f1
+         Hash Cond: (int4_tbl.f1 = tenk1.unique1)
+         ->  Seq Scan on public.int4_tbl
+               Output: int4_tbl.f1
+         ->  Hash
+               Output: tenk1.unique1
+               ->  Index Scan using tenk1_unique2 on public.tenk1
+                     Output: tenk1.unique1
+                     Index Cond: (tenk1.unique2 = "*VALUES*".column2)
+(14 rows)
+
+select * from
+  (values (0,9998), (1,1000)) v(id,x),
+  lateral (select f1 from int4_tbl
+           where f1 = any (select unique1 from tenk1
+                           where unique2 = v.x offset 0)) ss;
+ id |  x   | f1 
+----+------+----
+  0 | 9998 |  0
+(1 row)
 
 -- test some error cases where LATERAL should have been used but wasn't
 select f1,g from int4_tbl a, (select f1 as g) ss;
