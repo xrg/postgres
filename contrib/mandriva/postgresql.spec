@@ -345,12 +345,6 @@ make all
 popd
 
 %check
-#remove test suite from src.rpm for now
-rm -rf src/test
-
-#disabled for now, per CVE-2014-0067 - test suite allows local users to gain privileges
-#make check
-
 
 
 %install
@@ -582,10 +576,13 @@ exit 1
 %{_libdir}/postgresql/pageinspect.so
 %{_libdir}/postgresql/tcn.so
 %{_libdir}/postgresql/postgres_fdw.so
-%{_libdir}/postgresql/worker_spi.so
 %{_libdir}/postgresql/pg_prewarm.so
 %{_libdir}/postgresql/test_decoding.so
-%{_libdir}/postgresql/test_shm_mq.so
+%{_libdir}/postgresql/tsm_system_rows.so
+%{_libdir}/postgresql/tsm_system_time.so
+%{_libdir}/postgresql/hstore_plperl.so
+%{_libdir}/postgresql/hstore_plpython2.so
+%{_libdir}/postgresql/ltree_plpython2.so
 
 %{_bindir}/oid2name
 %{_bindir}/pgbench
@@ -623,6 +620,7 @@ exit 1
 %{_bindir}/pg_recvlogical
 %{_bindir}/pg_receivexlog
 %{_bindir}/pg_test_fsync
+%{_bindir}/pg_rewind
 %{_mandir}/man1/initdb.1*
 %{_mandir}/man1/pg_archivecleanup.1*
 %{_mandir}/man1/pg_controldata.*
@@ -636,6 +634,7 @@ exit 1
 %{_mandir}/man1/pg_basebackup.1*
 %{_mandir}/man1/pg_test_fsync.1*
 %{_mandir}/man1/pg_upgrade.1*
+%{_mandir}/man1/pg_rewind.1*
 %dir %{_libdir}/postgresql
 %dir %{_datadir}/postgresql
 %attr(755,postgres,postgres) %ghost %dir /var/run/postgresql
@@ -648,7 +647,6 @@ exit 1
 %{_libdir}/postgresql/pgxml.so
 %{_libdir}/postgresql/dict_int.so
 %{_libdir}/postgresql/dict_xsyn.so
-%{_libdir}/postgresql/test_parser.so
 %{_libdir}/postgresql/tsearch2.so
 %{_libdir}/postgresql/dict_snowball.so
 %{_libdir}/postgresql/auto_explain.so
@@ -656,7 +654,6 @@ exit 1
 %{_libdir}/postgresql/citext.so
 %{_libdir}/postgresql/pg_stat_statements.so
 %{_libdir}/postgresql/auth_delay.so
-%{_libdir}/postgresql/dummy_seclabel.so
 %{_libdir}/postgresql/file_fdw.so
 %if %{withuuid}
 %{_libdir}/postgresql/uuid-ossp.so
@@ -665,7 +662,6 @@ exit 1
 %{_libdir}/postgresql/euc2004_sjis2004.so
 %{_libdir}/postgresql/libpqwalreceiver.so
 %{_libdir}/postgresql/passwordcheck.so
-%{_libdir}/postgresql/pg_upgrade_support.so
 %{_libdir}/postgresql/unaccent.so
 %{_datadir}/postgresql/postgres.bki
 %{_datadir}/postgresql/postgres.description
@@ -681,6 +677,7 @@ exit 1
 %{_datadir}/postgresql/timezonesets
 %{_datadir}/postgresql/tsearch_data
 %{_datadir}/postgresql/extension
+%{_datadir}/locale/*/LC_MESSAGES/pg_rewind-*.mo
 
 %attr(700,postgres,postgres) %dir /var/log/postgres
 %{logrotatedir}/%{bname}
