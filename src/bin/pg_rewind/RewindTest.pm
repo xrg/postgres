@@ -130,7 +130,7 @@ sub poll_query_until
 {
 	my ($query, $connstr) = @_;
 
-	my $max_attempts = 30;
+	my $max_attempts = 90;
 	my $attempts     = 0;
 	my ($stdout, $stderr);
 
@@ -151,7 +151,7 @@ sub poll_query_until
 		$attempts++;
 	}
 
-	# The query result didn't change in 30 seconds. Give up. Print the stderr
+	# The query result didn't change in 90 seconds. Give up. Print the stderr
 	# from the last attempt, hopefully that's useful for debugging.
 	diag $stderr;
 	return 0;
@@ -245,7 +245,7 @@ sub promote_standby
 	  or die "Timed out while waiting for promotion of standby";
 
 	# Force a checkpoint after the promotion. pg_rewind looks at the control
-	# file todetermine what timeline the server is on, and that isn't updated
+	# file to determine what timeline the server is on, and that isn't updated
 	# immediately at promotion, but only at the next checkpoint. When running
 	# pg_rewind in remote mode, it's possible that we complete the test steps
 	# after promotion so quickly that when pg_rewind runs, the standby has not
