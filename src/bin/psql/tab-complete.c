@@ -956,7 +956,7 @@ psql_completion(const char *text, int start, int end)
 
 		COMPLETE_WITH_LIST(list_ALTER);
 	}
-	/* ALTER TABLE,INDEX,MATERIALIZED VIEW xxx ALL IN TABLESPACE xxx */
+	/* ALTER TABLE,INDEX,MATERIALIZED VIEW ALL IN TABLESPACE xxx */
 	else if (pg_strcasecmp(prev4_wd, "ALL") == 0 &&
 			 pg_strcasecmp(prev3_wd, "IN") == 0 &&
 			 pg_strcasecmp(prev2_wd, "TABLESPACE") == 0)
@@ -966,14 +966,22 @@ psql_completion(const char *text, int start, int end)
 
 		COMPLETE_WITH_LIST(list_ALTERALLINTSPC);
 	}
-	/* ALTER TABLE,INDEX,MATERIALIZED VIEW xxx ALL IN TABLESPACE xxx OWNED BY */
+	/* ALTER TABLE,INDEX,MATERIALIZED VIEW ALL IN TABLESPACE xxx OWNED BY */
 	else if (pg_strcasecmp(prev6_wd, "ALL") == 0 &&
 			 pg_strcasecmp(prev5_wd, "IN") == 0 &&
 			 pg_strcasecmp(prev4_wd, "TABLESPACE") == 0 &&
 			 pg_strcasecmp(prev2_wd, "OWNED") == 0 &&
-			 pg_strcasecmp(prev4_wd, "BY") == 0)
+			 pg_strcasecmp(prev_wd, "BY") == 0)
 	{
 		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+	}
+	/* ALTER TABLE,INDEX,MATERIALIZED VIEW ALL IN TABLESPACE xxx OWNED BY xxx */
+	else if (pg_strcasecmp(prev6_wd, "IN") == 0 &&
+			 pg_strcasecmp(prev5_wd, "TABLESPACE") == 0 &&
+			 pg_strcasecmp(prev3_wd, "OWNED") == 0 &&
+			 pg_strcasecmp(prev2_wd, "BY") == 0)
+	{
+		COMPLETE_WITH_CONST("SET TABLESPACE");
 	}
 	/* ALTER AGGREGATE,FUNCTION <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
@@ -2492,7 +2500,7 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev2_wd, "FROM") == 0)
 	{
 		static const char *const list_DELETE[] =
-		{"USING", "WHERE", "SET", NULL};
+		{"USING", "WHERE", NULL};
 
 		COMPLETE_WITH_LIST(list_DELETE);
 	}
@@ -3076,7 +3084,7 @@ psql_completion(const char *text, int start, int end)
 			 pg_strcasecmp(prev_wd, "LABEL") == 0)
 	{
 		static const char *const list_SECURITY_LABEL_preposition[] =
-		{"ON", "FOR"};
+			{"ON", "FOR", NULL};
 
 		COMPLETE_WITH_LIST(list_SECURITY_LABEL_preposition);
 	}
@@ -3681,9 +3689,8 @@ static char *
 _complete_from_query(int is_schema_query, const char *text, int state)
 {
 	static int	list_index,
-				string_length;
+				byte_length;
 	static PGresult *result = NULL;
-
 	/*
 	 * If this is the first time for this completion, we fetch a list of our
 	 * "things" from the backend.
@@ -3694,17 +3701,26 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 		char	   *e_text;
 		char	   *e_info_charp;
 		char	   *e_info_charp2;
+		const char *pstr = text;
+		int			char_length = 0;
 
 		list_index = 0;
-		string_length = strlen(text);
+		byte_length = strlen(text);
+
+		/* Count length as number of characters (not bytes), for passing to substring */
+		while (*pstr)
+		{
+			char_length++;
+			pstr += PQmblen(pstr, pset.encoding);
+		}
 
 		/* Free any prior result */
 		PQclear(result);
 		result = NULL;
 
 		/* Set up suitably-escaped copies of textual inputs */
-		e_text = pg_malloc(string_length * 2 + 1);
-		PQescapeString(e_text, text, string_length);
+		e_text = pg_malloc(byte_length * 2 + 1);
+		PQescapeString(e_text, text, byte_length);
 
 		if (completion_info_charp)
 		{
@@ -3749,7 +3765,7 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 								  completion_squery->selcondition);
 			appendPQExpBuffer(&query_buffer, "substring(%s,1,%d)='%s'",
 							  completion_squery->result,
-							  string_length, e_text);
+							  char_length, e_text);
 			appendPQExpBuffer(&query_buffer, " AND %s",
 							  completion_squery->viscondition);
 
@@ -3776,13 +3792,13 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 						   "SELECT pg_catalog.quote_ident(n.nspname) || '.' "
 							  "FROM pg_catalog.pg_namespace n "
 							  "WHERE substring(pg_catalog.quote_ident(n.nspname) || '.',1,%d)='%s'",
-							  string_length, e_text);
+							  char_length, e_text);
 			appendPQExpBuffer(&query_buffer,
 							  " AND (SELECT pg_catalog.count(*)"
 							  " FROM pg_catalog.pg_namespace"
 			" WHERE substring(pg_catalog.quote_ident(nspname) || '.',1,%d) ="
 							  " substring('%s',1,pg_catalog.length(pg_catalog.quote_ident(nspname))+1)) > 1",
-							  string_length, e_text);
+							  char_length, e_text);
 
 			/*
 			 * Add in matching qualified names, but only if there is exactly
@@ -3800,7 +3816,7 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 								  completion_squery->selcondition);
 			appendPQExpBuffer(&query_buffer, "substring(pg_catalog.quote_ident(n.nspname) || '.' || %s,1,%d)='%s'",
 							  qualresult,
-							  string_length, e_text);
+							  char_length, e_text);
 
 			/*
 			 * This condition exploits the single-matching-schema rule to
@@ -3809,13 +3825,13 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 			appendPQExpBuffer(&query_buffer,
 			" AND substring(pg_catalog.quote_ident(n.nspname) || '.',1,%d) ="
 							  " substring('%s',1,pg_catalog.length(pg_catalog.quote_ident(n.nspname))+1)",
-							  string_length, e_text);
+							  char_length, e_text);
 			appendPQExpBuffer(&query_buffer,
 							  " AND (SELECT pg_catalog.count(*)"
 							  " FROM pg_catalog.pg_namespace"
 			" WHERE substring(pg_catalog.quote_ident(nspname) || '.',1,%d) ="
 							  " substring('%s',1,pg_catalog.length(pg_catalog.quote_ident(nspname))+1)) = 1",
-							  string_length, e_text);
+							  char_length, e_text);
 
 			/* If an addon query was provided, use it */
 			if (completion_charp)
@@ -3825,7 +3841,7 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 		{
 			/* completion_charp is an sprintf-style format string */
 			appendPQExpBuffer(&query_buffer, completion_charp,
-							  string_length, e_text,
+							  char_length, e_text,
 							  e_info_charp, e_info_charp,
 							  e_info_charp2, e_info_charp2);
 		}
@@ -3851,7 +3867,7 @@ _complete_from_query(int is_schema_query, const char *text, int state)
 
 		while (list_index < PQntuples(result) &&
 			   (item = PQgetvalue(result, list_index++, 0)))
-			if (pg_strncasecmp(text, item, string_length) == 0)
+			if (pg_strncasecmp(text, item, byte_length) == 0)
 				return pg_strdup(item);
 	}
 

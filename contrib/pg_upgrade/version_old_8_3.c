@@ -73,7 +73,7 @@ old_8_3_check_for_name_data_type_usage(ClusterInfo *cluster)
 		{
 			found = true;
 			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 			if (!db_used)
 			{
 				fprintf(script, "Database: %s\n", active_db->db_name);
@@ -163,7 +163,7 @@ old_8_3_check_for_tsquery_usage(ClusterInfo *cluster)
 		{
 			found = true;
 			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 			if (!db_used)
 			{
 				fprintf(script, "Database: %s\n", active_db->db_name);
@@ -242,7 +242,7 @@ old_8_3_check_ltree_usage(ClusterInfo *cluster)
 			found = true;
 			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
 				pg_fatal("Could not open file \"%s\": %s\n",
-						 output_path, getErrorText(errno));
+						 output_path, getErrorText());
 			if (!db_used)
 			{
 				fprintf(script, "Database: %s\n", active_db->db_name);
@@ -365,11 +365,16 @@ old_8_3_rebuild_tsvector_tables(ClusterInfo *cluster, bool check_mode)
 			if (!check_mode)
 			{
 				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 				if (!db_used)
 				{
-					fprintf(script, "\\connect %s\n\n",
-							quote_identifier(active_db->db_name));
+					PQExpBufferData connectbuf;
+
+					initPQExpBuffer(&connectbuf);
+					appendPsqlMetaConnect(&connectbuf, active_db->db_name);
+					appendPQExpBufferChar(&connectbuf, '\n');
+					fputs(connectbuf.data, script);
+					termPQExpBuffer(&connectbuf);
 					db_used = true;
 				}
 
@@ -481,11 +486,15 @@ old_8_3_invalidate_hash_gin_indexes(ClusterInfo *cluster, bool check_mode)
 			if (!check_mode)
 			{
 				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 				if (!db_used)
 				{
-					fprintf(script, "\\connect %s\n",
-							quote_identifier(active_db->db_name));
+					PQExpBufferData connectbuf;
+
+					initPQExpBuffer(&connectbuf);
+					appendPsqlMetaConnect(&connectbuf, active_db->db_name);
+					fputs(connectbuf.data, script);
+					termPQExpBuffer(&connectbuf);
 					db_used = true;
 				}
 				fprintf(script, "REINDEX INDEX %s.%s;\n",
@@ -600,11 +609,15 @@ old_8_3_invalidate_bpchar_pattern_ops_indexes(ClusterInfo *cluster,
 			if (!check_mode)
 			{
 				if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+					pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 				if (!db_used)
 				{
-					fprintf(script, "\\connect %s\n",
-							quote_identifier(active_db->db_name));
+					PQExpBufferData connectbuf;
+
+					initPQExpBuffer(&connectbuf);
+					appendPsqlMetaConnect(&connectbuf, active_db->db_name);
+					fputs(connectbuf.data, script);
+					termPQExpBuffer(&connectbuf);
 					db_used = true;
 				}
 				fprintf(script, "REINDEX INDEX %s.%s;\n",
@@ -722,11 +735,16 @@ old_8_3_create_sequence_script(ClusterInfo *cluster)
 			found = true;
 
 			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
-				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText(errno));
+				pg_fatal("could not open file \"%s\": %s\n", output_path, getErrorText());
 			if (!db_used)
 			{
-				fprintf(script, "\\connect %s\n\n",
-						quote_identifier(active_db->db_name));
+				PQExpBufferData connectbuf;
+
+				initPQExpBuffer(&connectbuf);
+				appendPsqlMetaConnect(&connectbuf, active_db->db_name);
+				appendPQExpBufferChar(&connectbuf, '\n');
+				fputs(connectbuf.data, script);
+				termPQExpBuffer(&connectbuf);
 				db_used = true;
 			}
 

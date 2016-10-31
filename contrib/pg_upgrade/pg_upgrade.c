@@ -389,7 +389,7 @@ setup(char *argv0, bool *live_check)
 
 	/* get path to pg_upgrade executable */
 	if (find_my_exec(argv0, exec_path) < 0)
-		pg_fatal("Could not get path name to pg_upgrade: %s\n", getErrorText(errno));
+		pg_fatal("Could not get path name to pg_upgrade: %s\n", getErrorText());
 
 	/* Trim off program name and keep just path */
 	*last_dir_separator(exec_path) = '\0';
@@ -497,6 +497,15 @@ create_new_objects(void)
 		char		sql_file_name[MAXPGPATH],
 					log_file_name[MAXPGPATH];
 		DbInfo	   *old_db = &old_cluster.dbarr.dbs[dbnum];
+		PQExpBufferData connstr,
+					escaped_connstr;
+
+		initPQExpBuffer(&connstr);
+		appendPQExpBuffer(&connstr, "dbname=");
+		appendConnStrVal(&connstr, old_db->db_name);
+		initPQExpBuffer(&escaped_connstr);
+		appendShellString(&escaped_connstr, connstr.data);
+		termPQExpBuffer(&connstr);
 
 		pg_log(PG_STATUS, "%s", old_db->db_name);
 		snprintf(sql_file_name, sizeof(sql_file_name), DB_DUMP_FILE_MASK, old_db->db_oid);
@@ -508,11 +517,13 @@ create_new_objects(void)
 		 */
 		parallel_exec_prog(log_file_name,
 						   NULL,
-						   "\"%s/pg_restore\" %s --exit-on-error --verbose --dbname \"%s\" \"%s\"",
+		 "\"%s/pg_restore\" %s --exit-on-error --verbose --dbname %s \"%s\"",
 						   new_cluster.bindir,
 						   cluster_conn_opts(&new_cluster),
-						   old_db->db_name,
+						   escaped_connstr.data,
 						   sql_file_name);
+
+		termPQExpBuffer(&escaped_connstr);
 	}
 
 	/* reap all children */
@@ -524,12 +535,10 @@ create_new_objects(void)
 
 	/*
 	 * We don't have minmxids for databases or relations in pre-9.3
-	 * clusters, so set those after we have restores the schemas.
+	 * clusters, so set those after we have restored the schema.
 	 */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) < 903)
 		set_frozenxids(true);
-
-	optionally_create_toast_tables();
 
 	/* regenerate now that we have objects in the databases */
 	get_db_and_rel_infos(&new_cluster);

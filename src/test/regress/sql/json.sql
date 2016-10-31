@@ -7,11 +7,7 @@ SELECT '"abc
 def"'::json;					-- ERROR, unescaped newline in string constant
 SELECT '"\n\"\\"'::json;		-- OK, legal escapes
 SELECT '"\v"'::json;			-- ERROR, not a valid JSON escape
-SELECT '"\u"'::json;			-- ERROR, incomplete escape
-SELECT '"\u00"'::json;			-- ERROR, incomplete escape
-SELECT '"\u000g"'::json;		-- ERROR, g is not a hex digit
-SELECT '"\u0000"'::json;		-- OK, legal escape
-SELECT '"\uaBcD"'::json;		-- OK, uppercase and lower case both OK
+-- see json_encoding test for input with unicode escapes
 
 -- Numbers.
 SELECT '1'::json;				-- OK
@@ -120,8 +116,11 @@ COMMIT;
 select to_json(date '2014-05-28');
 
 select to_json(date 'Infinity');
+select to_json(date '-Infinity');
 select to_json(timestamp 'Infinity');
+select to_json(timestamp '-Infinity');
 select to_json(timestamptz 'Infinity');
+select to_json(timestamptz '-Infinity');
 
 --json_agg
 
@@ -395,28 +394,6 @@ select * from json_populate_recordset(null::jpop,'[{"a":"blurfl","x":43.2},{"b":
 select * from json_populate_recordset(row('def',99,null)::jpop,'[{"a":"blurfl","x":43.2},{"b":3,"c":"2012-01-20 10:42:53"}]') q;
 select * from json_populate_recordset(row('def',99,null)::jpop,'[{"a":[100,200,300],"x":43.2},{"a":{"z":true},"b":3,"c":"2012-01-20 10:42:53"}]') q;
 
--- handling of unicode surrogate pairs
-
-select json '{ "a":  "\ud83d\ude04\ud83d\udc36" }' -> 'a' as correct_in_utf8;
-select json '{ "a":  "\ud83d\ud83d" }' -> 'a'; -- 2 high surrogates in a row
-select json '{ "a":  "\ude04\ud83d" }' -> 'a'; -- surrogates in wrong order
-select json '{ "a":  "\ud83dX" }' -> 'a'; -- orphan high surrogate
-select json '{ "a":  "\ude04X" }' -> 'a'; -- orphan low surrogate
-
---handling of simple unicode escapes
-
-select json '{ "a":  "the Copyright \u00a9 sign" }' as correct_in_utf8;
-select json '{ "a":  "dollar \u0024 character" }' as correct_everywhere;
-select json '{ "a":  "dollar \\u0024 character" }' as not_an_escape;
-select json '{ "a":  "null \u0000 escape" }' as not_unescaped;
-select json '{ "a":  "null \\u0000 escape" }' as not_an_escape;
-
-select json '{ "a":  "the Copyright \u00a9 sign" }' ->> 'a' as correct_in_utf8;
-select json '{ "a":  "dollar \u0024 character" }' ->> 'a' as correct_everywhere;
-select json '{ "a":  "dollar \\u0024 character" }' ->> 'a' as not_an_escape;
-select json '{ "a":  "null \u0000 escape" }' ->> 'a' as fails;
-select json '{ "a":  "null \\u0000 escape" }' ->> 'a' as not_an_escape;
-
 --json_typeof() function
 select value, json_typeof(value)
   from (values (json '123.4'),
@@ -510,7 +487,6 @@ select json_object('{a,b,NULL,"d e f"}','{1,2,3,"a b c"}');
 
 select json_object('{a,b,"","d e f"}','{1,2,3,"a b c"}');
 
-
 -- json_to_record and json_to_recordset
 
 select * from json_to_record('{"a":1,"b":"foo","c":"bar"}')
@@ -521,3 +497,11 @@ select * from json_to_recordset('[{"a":1,"b":"foo","d":false},{"a":2,"b":"bar","
 
 select * from json_to_recordset('[{"a":1,"b":{"d":"foo"},"c":true},{"a":2,"c":false,"b":{"d":"bar"}}]')
     as x(a int, b json, c boolean);
+
+select *, c is null as c_is_null
+from json_to_record('{"a":1, "b":{"c":16, "d":2}, "x":8}'::json)
+    as t(a int, b json, c text, x int);
+
+select *, c is null as c_is_null
+from json_to_recordset('[{"a":1, "b":{"c":16, "d":2}, "x":8}]'::json)
+    as t(a int, b json, c text, x int);

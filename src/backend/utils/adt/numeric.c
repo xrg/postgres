@@ -697,10 +697,6 @@ numeric_recv(PG_FUNCTION_ARGS)
 	init_var(&value);
 
 	len = (uint16) pq_getmsgint(buf, sizeof(uint16));
-	if (len < 0 || len > NUMERIC_MAX_PRECISION + NUMERIC_MAX_RESULT_SCALE)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-				 errmsg("invalid length in external \"numeric\" value")));
 
 	alloc_var(&value, len);
 
@@ -3752,12 +3748,19 @@ set_var_from_str(const char *str, const char *cp, NumericVar *dest)
 					 errmsg("invalid input syntax for type numeric: \"%s\"",
 							str)));
 		cp = endptr;
-		if (exponent > NUMERIC_MAX_PRECISION ||
-			exponent < -NUMERIC_MAX_PRECISION)
+
+		/*
+		 * At this point, dweight and dscale can't be more than about
+		 * INT_MAX/2 due to the MaxAllocSize limit on string length, so
+		 * constraining the exponent similarly should be enough to prevent
+		 * integer overflow in this function.  If the value is too large to
+		 * fit in storage format, make_result() will complain about it later;
+		 * for consistency use the same ereport errcode/text as make_result().
+		 */
+		if (exponent >= INT_MAX / 2 || exponent <= -(INT_MAX / 2))
 			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-					 errmsg("invalid input syntax for type numeric: \"%s\"",
-							str)));
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value overflows numeric format")));
 		dweight += (int) exponent;
 		dscale -= (int) exponent;
 		if (dscale < 0)
@@ -5311,8 +5314,14 @@ div_var_fast(NumericVar *var1, NumericVar *var2, NumericVar *result,
 	/*
 	 * maxdiv tracks the maximum possible absolute value of any div[] entry;
 	 * when this threatens to exceed INT_MAX, we take the time to propagate
-	 * carries.  To avoid overflow in maxdiv itself, it actually represents
-	 * the max possible abs. value divided by NBASE-1.
+	 * carries.  Furthermore, we need to ensure that overflow doesn't occur
+	 * during the carry propagation passes either.  The carry values may have
+	 * an absolute value as high as INT_MAX/NBASE + 1, so really we must
+	 * normalize when digits threaten to exceed INT_MAX - INT_MAX/NBASE - 1.
+	 *
+	 * To avoid overflow in maxdiv itself, it represents the max absolute
+	 * value divided by NBASE-1, ie, at the top of the loop it is known that
+	 * no div[] entry has an absolute value exceeding maxdiv * (NBASE-1).
 	 */
 	maxdiv = 1;
 
@@ -5338,7 +5347,7 @@ div_var_fast(NumericVar *var1, NumericVar *var2, NumericVar *result,
 		{
 			/* Do we need to normalize now? */
 			maxdiv += Abs(qdigit);
-			if (maxdiv > INT_MAX / (NBASE - 1))
+			if (maxdiv > (INT_MAX - INT_MAX / NBASE - 1) / (NBASE - 1))
 			{
 				/* Yes, do it */
 				carry = 0;

@@ -523,6 +523,66 @@ ALTER TABLE FKTABLE ADD FOREIGN KEY(ftest2, ftest1)
      references pktable(ptest1, ptest2);
 ERROR:  foreign key constraint "fktable_ftest2_fkey" cannot be implemented
 DETAIL:  Key columns "ftest2" and "ptest1" are of incompatible types: inet and integer.
+DROP TABLE FKTABLE;
+DROP TABLE PKTABLE;
+-- Test that ALTER CONSTRAINT updates trigger deferrability properly
+CREATE TEMP TABLE PKTABLE (ptest1 int primary key);
+CREATE TEMP TABLE FKTABLE (ftest1 int);
+ALTER TABLE FKTABLE ADD CONSTRAINT fknd FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdd FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdi FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY IMMEDIATE;
+ALTER TABLE FKTABLE ADD CONSTRAINT fknd2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fknd2 NOT DEFERRABLE;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdd2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdd2 DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdi2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY IMMEDIATE;
+SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
+WHERE tgrelid = 'pktable'::regclass
+ORDER BY 1,2,3;
+ conname |         tgfoid         | tgtype | tgdeferrable | tginitdeferred 
+---------+------------------------+--------+--------------+----------------
+ fkdd    | "RI_FKey_cascade_del"  |      9 | f            | f
+ fkdd    | "RI_FKey_noaction_upd" |     17 | t            | t
+ fkdd2   | "RI_FKey_cascade_del"  |      9 | f            | f
+ fkdd2   | "RI_FKey_noaction_upd" |     17 | t            | t
+ fkdi    | "RI_FKey_cascade_del"  |      9 | f            | f
+ fkdi    | "RI_FKey_noaction_upd" |     17 | t            | f
+ fkdi2   | "RI_FKey_cascade_del"  |      9 | f            | f
+ fkdi2   | "RI_FKey_noaction_upd" |     17 | t            | f
+ fknd    | "RI_FKey_cascade_del"  |      9 | f            | f
+ fknd    | "RI_FKey_noaction_upd" |     17 | f            | f
+ fknd2   | "RI_FKey_cascade_del"  |      9 | f            | f
+ fknd2   | "RI_FKey_noaction_upd" |     17 | f            | f
+(12 rows)
+
+SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
+WHERE tgrelid = 'fktable'::regclass
+ORDER BY 1,2,3;
+ conname |       tgfoid        | tgtype | tgdeferrable | tginitdeferred 
+---------+---------------------+--------+--------------+----------------
+ fkdd    | "RI_FKey_check_ins" |      5 | t            | t
+ fkdd    | "RI_FKey_check_upd" |     17 | t            | t
+ fkdd2   | "RI_FKey_check_ins" |      5 | t            | t
+ fkdd2   | "RI_FKey_check_upd" |     17 | t            | t
+ fkdi    | "RI_FKey_check_ins" |      5 | t            | f
+ fkdi    | "RI_FKey_check_upd" |     17 | t            | f
+ fkdi2   | "RI_FKey_check_ins" |      5 | t            | f
+ fkdi2   | "RI_FKey_check_upd" |     17 | t            | f
+ fknd    | "RI_FKey_check_ins" |      5 | f            | f
+ fknd    | "RI_FKey_check_upd" |     17 | f            | f
+ fknd2   | "RI_FKey_check_ins" |      5 | f            | f
+ fknd2   | "RI_FKey_check_upd" |     17 | f            | f
+(12 rows)
+
 -- temp tables should go away by themselves, need not drop them.
 -- test check constraint adding
 create table atacc1 ( test int );
@@ -1805,16 +1865,125 @@ where oid = 'test_storage'::regclass;
  t
 (1 row)
 
--- ALTER TYPE with a check constraint and a child table (bug before Nov 2012)
-CREATE TABLE test_inh_check (a float check (a > 10.2));
+-- ALTER COLUMN TYPE with a check constraint and a child table (bug #13779)
+CREATE TABLE test_inh_check (a float check (a > 10.2), b float);
 CREATE TABLE test_inh_check_child() INHERITS(test_inh_check);
+\d test_inh_check
+     Table "public.test_inh_check"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | double precision | 
+ b      | double precision | 
+Check constraints:
+    "test_inh_check_a_check" CHECK (a > 10.2::double precision)
+Number of child tables: 1 (Use \d+ to list them.)
+
+\d test_inh_check_child
+  Table "public.test_inh_check_child"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | double precision | 
+ b      | double precision | 
+Check constraints:
+    "test_inh_check_a_check" CHECK (a > 10.2::double precision)
+Inherits: test_inh_check
+
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+       relname        |        conname         | coninhcount | conislocal | connoinherit 
+----------------------+------------------------+-------------+------------+--------------
+ test_inh_check       | test_inh_check_a_check |           0 | t          | f
+ test_inh_check_child | test_inh_check_a_check |           1 | f          | f
+(2 rows)
+
 ALTER TABLE test_inh_check ALTER COLUMN a TYPE numeric;
+\d test_inh_check
+     Table "public.test_inh_check"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | numeric          | 
+ b      | double precision | 
+Check constraints:
+    "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
+Number of child tables: 1 (Use \d+ to list them.)
+
+\d test_inh_check_child
+  Table "public.test_inh_check_child"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | numeric          | 
+ b      | double precision | 
+Check constraints:
+    "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
+Inherits: test_inh_check
+
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+       relname        |        conname         | coninhcount | conislocal | connoinherit 
+----------------------+------------------------+-------------+------------+--------------
+ test_inh_check       | test_inh_check_a_check |           0 | t          | f
+ test_inh_check_child | test_inh_check_a_check |           1 | f          | f
+(2 rows)
+
+-- also try noinherit, local, and local+inherited cases
+ALTER TABLE test_inh_check ADD CONSTRAINT bnoinherit CHECK (b > 100) NO INHERIT;
+ALTER TABLE test_inh_check_child ADD CONSTRAINT blocal CHECK (b < 1000);
+ALTER TABLE test_inh_check_child ADD CONSTRAINT bmerged CHECK (b > 1);
+ALTER TABLE test_inh_check ADD CONSTRAINT bmerged CHECK (b > 1);
+NOTICE:  merging constraint "bmerged" with inherited definition
+\d test_inh_check
+     Table "public.test_inh_check"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | numeric          | 
+ b      | double precision | 
+Check constraints:
+    "bmerged" CHECK (b > 1::double precision)
+    "bnoinherit" CHECK (b > 100::double precision) NO INHERIT
+    "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
+Number of child tables: 1 (Use \d+ to list them.)
+
+\d test_inh_check_child
+  Table "public.test_inh_check_child"
+ Column |       Type       | Modifiers 
+--------+------------------+-----------
+ a      | numeric          | 
+ b      | double precision | 
+Check constraints:
+    "blocal" CHECK (b < 1000::double precision)
+    "bmerged" CHECK (b > 1::double precision)
+    "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
+Inherits: test_inh_check
+
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+       relname        |        conname         | coninhcount | conislocal | connoinherit 
+----------------------+------------------------+-------------+------------+--------------
+ test_inh_check       | bmerged                |           0 | t          | f
+ test_inh_check       | bnoinherit             |           0 | t          | t
+ test_inh_check       | test_inh_check_a_check |           0 | t          | f
+ test_inh_check_child | blocal                 |           0 | t          | f
+ test_inh_check_child | bmerged                |           1 | t          | f
+ test_inh_check_child | test_inh_check_a_check |           1 | f          | f
+(6 rows)
+
+ALTER TABLE test_inh_check ALTER COLUMN b TYPE numeric;
+NOTICE:  merging constraint "bmerged" with inherited definition
 \d test_inh_check
 Table "public.test_inh_check"
  Column |  Type   | Modifiers 
 --------+---------+-----------
  a      | numeric | 
+ b      | numeric | 
 Check constraints:
+    "bmerged" CHECK (b::double precision > 1::double precision)
+    "bnoinherit" CHECK (b::double precision > 100::double precision) NO INHERIT
     "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
 Number of child tables: 1 (Use \d+ to list them.)
 
@@ -1823,9 +1992,26 @@ Table "public.test_inh_check_child"
  Column |  Type   | Modifiers 
 --------+---------+-----------
  a      | numeric | 
+ b      | numeric | 
 Check constraints:
+    "blocal" CHECK (b::double precision < 1000::double precision)
+    "bmerged" CHECK (b::double precision > 1::double precision)
     "test_inh_check_a_check" CHECK (a::double precision > 10.2::double precision)
 Inherits: test_inh_check
+
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+       relname        |        conname         | coninhcount | conislocal | connoinherit 
+----------------------+------------------------+-------------+------------+--------------
+ test_inh_check       | bmerged                |           0 | t          | f
+ test_inh_check       | bnoinherit             |           0 | t          | t
+ test_inh_check       | test_inh_check_a_check |           0 | t          | f
+ test_inh_check_child | blocal                 |           0 | t          | f
+ test_inh_check_child | bmerged                |           1 | t          | f
+ test_inh_check_child | test_inh_check_a_check |           1 | f          | f
+(6 rows)
 
 -- check for rollback of ANALYZE corrupting table property flags (bug #11638)
 CREATE TABLE check_fk_presence_1 (id int PRIMARY KEY, t text);

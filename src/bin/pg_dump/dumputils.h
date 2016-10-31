@@ -38,6 +38,8 @@ extern PQExpBuffer (*getLocalPQExpBuffer) (void);
 extern const char *fmtId(const char *identifier);
 extern const char *fmtQualifiedId(int remoteVersion,
 			   const char *schema, const char *id);
+extern char *formatPGVersionNumber(int version_number, bool include_minor,
+					  char *buf, size_t buflen);
 extern void appendStringLiteral(PQExpBuffer buf, const char *str,
 					int encoding, bool std_strings);
 extern void appendStringLiteralConn(PQExpBuffer buf, const char *str,
@@ -47,6 +49,9 @@ extern void appendStringLiteralDQ(PQExpBuffer buf, const char *str,
 extern void appendByteaLiteral(PQExpBuffer buf,
 				   const unsigned char *str, size_t length,
 				   bool std_strings);
+extern void appendShellString(PQExpBuffer buf, const char *str);
+extern void appendConnStrVal(PQExpBuffer buf, const char *str);
+extern void appendPsqlMetaConnect(PQExpBuffer buf, const char *dbname);
 extern bool parsePGArray(const char *atext, char ***itemarray, int *nitems);
 extern bool buildACLCommands(const char *name, const char *subname,
 				 const char *type, const char *acls, const char *owner,

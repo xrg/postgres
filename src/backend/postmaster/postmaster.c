@@ -561,6 +561,16 @@ PostmasterMain(int argc, char *argv[])
 	umask(S_IRWXG | S_IRWXO);
 
 	/*
+	 * Initialize random(3) so we don't get the same values in every run.
+	 *
+	 * Note: the seed is pretty predictable from externally-visible facts such
+	 * as postmaster start time, so avoid using random() for security-critical
+	 * random values during postmaster startup.  At the time of first
+	 * connection, PostmasterRandom will select a hopefully-more-random seed.
+	 */
+	srandom((unsigned int) (MyProcPid ^ MyStartTime));
+
+	/*
 	 * By default, palloc() requests in the postmaster will be allocated in
 	 * the PostmasterContext, which is space that can be recycled by backends.
 	 * Allocated data that needs to be available to backends should be
@@ -816,10 +826,14 @@ PostmasterMain(int argc, char *argv[])
 	if (output_config_variable != NULL)
 	{
 		/*
-		 * permission is handled because the user is reading inside the data
-		 * dir
+		 * "-C guc" was specified, so print GUC's value and exit.  No extra
+		 * permission check is needed because the user is reading inside the
+		 * data dir.
 		 */
-		puts(GetConfigOption(output_config_variable, false, false));
+		const char *config_val = GetConfigOption(output_config_variable,
+												 false, false);
+
+		puts(config_val ? config_val : "");
 		ExitPostmaster(0);
 	}
 
@@ -1596,10 +1610,10 @@ ServerLoop(void)
 {
 	fd_set		readmask;
 	int			nSockets;
-	time_t		now,
+	time_t		last_lockfile_recheck_time,
 				last_touch_time;
 
-	last_touch_time = time(NULL);
+	last_lockfile_recheck_time = last_touch_time = time(NULL);
 
 	nSockets = initMasks(&readmask);
 
@@ -1607,6 +1621,7 @@ ServerLoop(void)
 	{
 		fd_set		rmask;
 		int			selres;
+		time_t		now;
 
 		/*
 		 * Wait for a connection request to arrive.
@@ -1734,7 +1749,8 @@ ServerLoop(void)
 			PgArchPID = pgarch_start();
 
 		/* If we have lost the stats collector, try to start a new one */
-		if (PgStatPID == 0 && pmState == PM_RUN)
+		if (PgStatPID == 0 &&
+			(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
 			PgStatPID = pgstat_start();
 
 		/* If we need to signal the autovacuum launcher, do so now */
@@ -1749,19 +1765,6 @@ ServerLoop(void)
 		if (StartWorkerNeeded || HaveCrashedWorker)
 			maybe_start_bgworker();
 
-		/*
-		 * Touch Unix socket and lock files every 58 minutes, to ensure that
-		 * they are not removed by overzealous /tmp-cleaning tasks.  We assume
-		 * no one runs cleaners with cutoff times of less than an hour ...
-		 */
-		now = time(NULL);
-		if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
-		{
-			TouchSocketFiles();
-			TouchSocketLockFiles();
-			last_touch_time = now;
-		}
-
 #ifdef HAVE_PTHREAD_IS_THREADED_NP
 
 		/*
@@ -1770,6 +1773,16 @@ ServerLoop(void)
 		 */
 		Assert(pthread_is_threaded_np() == 0);
 #endif
+
+		/*
+		 * Lastly, check to see if it's time to do some things that we don't
+		 * want to do every single time through the loop, because they're a
+		 * bit expensive.  Note that there's up to a minute of slop in when
+		 * these tasks will be performed, since DetermineSleepTime() will let
+		 * us sleep at most that long; except for SIGKILL timeout which has
+		 * special-case logic there.
+		 */
+		now = time(NULL);
 
 		/*
 		 * If we already sent SIGQUIT to children and they are slow to shut
@@ -1787,6 +1800,39 @@ ServerLoop(void)
 			TerminateChildren(SIGKILL);
 			/* reset flag so we don't SIGKILL again */
 			AbortStartTime = 0;
+		}
+
+		/*
+		 * Once a minute, verify that postmaster.pid hasn't been removed or
+		 * overwritten.  If it has, we force a shutdown.  This avoids having
+		 * postmasters and child processes hanging around after their database
+		 * is gone, and maybe causing problems if a new database cluster is
+		 * created in the same place.  It also provides some protection
+		 * against a DBA foolishly removing postmaster.pid and manually
+		 * starting a new postmaster.  Data corruption is likely to ensue from
+		 * that anyway, but we can minimize the damage by aborting ASAP.
+		 */
+		if (now - last_lockfile_recheck_time >= 1 * SECS_PER_MINUTE)
+		{
+			if (!RecheckDataDirLockFile())
+			{
+				ereport(LOG,
+						(errmsg("performing immediate shutdown because data directory lock file is invalid")));
+				kill(MyProcPid, SIGQUIT);
+			}
+			last_lockfile_recheck_time = now;
+		}
+
+		/*
+		 * Touch Unix socket and lock files every 58 minutes, to ensure that
+		 * they are not removed by overzealous /tmp-cleaning tasks.  We assume
+		 * no one runs cleaners with cutoff times of less than an hour ...
+		 */
+		if (now - last_touch_time >= 58 * SECS_PER_MINUTE)
+		{
+			TouchSocketFiles();
+			TouchSocketLockFiles();
+			last_touch_time = now;
 		}
 	}
 }
@@ -2884,7 +2930,7 @@ reaper(SIGNAL_ARGS)
 			if (!EXIT_STATUS_0(exitstatus))
 				LogChildExit(LOG, _("statistics collector process"),
 							 pid, exitstatus);
-			if (pmState == PM_RUN)
+			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
 				PgStatPID = pgstat_start();
 			continue;
 		}
@@ -4082,6 +4128,14 @@ BackendInitialize(Port *port)
 	else
 		snprintf(remote_ps_data, sizeof(remote_ps_data), "%s(%s)", remote_host, remote_port);
 
+	/*
+	 * Save remote_host and remote_port in port structure (after this, they
+	 * will appear in log_line_prefix data for log messages).
+	 */
+	port->remote_host = strdup(remote_host);
+	port->remote_port = strdup(remote_port);
+
+	/* And now we can issue the Log_connections message, if wanted */
 	if (Log_connections)
 	{
 		if (remote_port[0])
@@ -4094,12 +4148,6 @@ BackendInitialize(Port *port)
 					(errmsg("connection received: host=%s",
 							remote_host)));
 	}
-
-	/*
-	 * save remote_host and remote_port in port structure
-	 */
-	port->remote_host = strdup(remote_host);
-	port->remote_port = strdup(remote_port);
 
 	/*
 	 * If we did a reverse lookup to name, we might as well save the results
@@ -4634,9 +4682,16 @@ SubPostmasterMain(int argc, char *argv[])
 	/* Setup essential subsystems (to ensure elog() behaves sanely) */
 	InitializeGUCOptions();
 
+	/* Check we got appropriate args */
+	if (argc < 3)
+		elog(FATAL, "invalid subpostmaster invocation");
+
 	/* Read in the variables file */
 	memset(&port, 0, sizeof(Port));
 	read_backend_variables(argv[2], &port);
+
+	/* Close the postmaster's sockets (as soon as we know them) */
+	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
 
 	/*
 	 * Set reference point for stack-depth checking
@@ -4655,14 +4710,21 @@ SubPostmasterMain(int argc, char *argv[])
 				 errmsg("out of memory")));
 #endif
 
-	/* Check we got appropriate args */
-	if (argc < 3)
-		elog(FATAL, "invalid subpostmaster invocation");
-
 	/*
 	 * If appropriate, physically re-attach to shared memory segment. We want
 	 * to do this before going any further to ensure that we can attach at the
-	 * same address the postmaster used.
+	 * same address the postmaster used.  On the other hand, if we choose not
+	 * to re-attach, we may have other cleanup to do.
+	 *
+	 * If testing EXEC_BACKEND on Linux, you should run this as root before
+	 * starting the postmaster:
+	 *
+	 * echo 0 >/proc/sys/kernel/randomize_va_space
+	 *
+	 * This prevents using randomized stack and code addresses that cause the
+	 * child process's memory map to be different from the parent's, making it
+	 * sometimes impossible to attach to shared memory at the desired address.
+	 * Return the setting to its old value (usually '1' or '2') when finished.
 	 */
 	if (strcmp(argv[1], "--forkbackend") == 0 ||
 		strcmp(argv[1], "--forkavlauncher") == 0 ||
@@ -4670,6 +4732,8 @@ SubPostmasterMain(int argc, char *argv[])
 		strcmp(argv[1], "--forkboot") == 0 ||
 		strncmp(argv[1], "--forkbgworker=", 15) == 0)
 		PGSharedMemoryReAttach();
+	else
+		PGSharedMemoryNoReAttach();
 
 	/* autovacuum needs this set before calling InitProcess */
 	if (strcmp(argv[1], "--forkavlauncher") == 0)
@@ -4706,9 +4770,6 @@ SubPostmasterMain(int argc, char *argv[])
 	{
 		Assert(argc == 3);		/* shouldn't be any more args */
 
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/*
 		 * Need to reinitialize the SSL library in the backend, since the
 		 * context structures contain function pointers and cannot be passed
@@ -4739,17 +4800,7 @@ SubPostmasterMain(int argc, char *argv[])
 		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
 		InitProcess();
 
-		/*
-		 * Attach process to shared data structures.  If testing EXEC_BACKEND
-		 * on Linux, you must run this as root before starting the postmaster:
-		 *
-		 * echo 0 >/proc/sys/kernel/randomize_va_space
-		 *
-		 * This prevents a randomized stack base address that causes child
-		 * shared memory to be at a different address than the parent, making
-		 * it impossible to attached to shared memory.  Return the value to
-		 * '1' when finished.
-		 */
+		/* Attach process to shared data structures */
 		CreateSharedMemoryAndSemaphores(false, 0);
 
 		/* And run the backend */
@@ -4757,9 +4808,6 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkboot") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
@@ -4773,9 +4821,6 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkavlauncher") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
@@ -4789,9 +4834,6 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkavworker") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
@@ -4810,9 +4852,6 @@ SubPostmasterMain(int argc, char *argv[])
 		/* do this as early as possible; in particular, before InitProcess() */
 		IsBackgroundWorker = true;
 
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Restore basic shared memory pointers */
 		InitShmemAccess(UsedShmemSegAddr);
 
@@ -4828,27 +4867,18 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkarch") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Do not want to attach to shared memory */
 
 		PgArchiverMain(argc, argv);		/* does not return */
 	}
 	if (strcmp(argv[1], "--forkcol") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Do not want to attach to shared memory */
 
 		PgstatCollectorMain(argc, argv);		/* does not return */
 	}
 	if (strcmp(argv[1], "--forklog") == 0)
 	{
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(true);
-
 		/* Do not want to attach to shared memory */
 
 		SysLoggerMain(argc, argv);		/* does not return */
@@ -5086,6 +5116,10 @@ RandomSalt(char *md5Salt)
 
 /*
  * PostmasterRandom
+ *
+ * Caution: use this only for values needed during connection-request
+ * processing.  Otherwise, the intended property of having an unpredictable
+ * delay between random_start_time and random_stop_time will be broken.
  */
 static long
 PostmasterRandom(void)

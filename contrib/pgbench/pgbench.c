@@ -52,6 +52,10 @@
 #ifndef INT64_MAX
 #define INT64_MAX	INT64CONST(0x7FFFFFFFFFFFFFFF)
 #endif
+#ifndef INT64_MIN
+#define INT64_MIN	(-INT64CONST(0x7FFFFFFFFFFFFFFF) - 1)
+#endif
+
 
 /*
  * Multi-platform pthread implementations
@@ -200,13 +204,14 @@ typedef struct
 	int			state;			/* state No. */
 	int			cnt;			/* xacts count */
 	int			ecnt;			/* error count */
-	int			listen;			/* 0 indicates that an async query has been
+	int			listen;			/* 1 indicates that an async query has been
 								 * sent */
 	int			sleeping;		/* 1 indicates that the client is napping */
 	bool		throttling;		/* whether nap is for throttling */
 	Variable   *variables;		/* array of variable definitions */
 	int			nvariables;
 	int64		txn_scheduled;	/* scheduled start time of transaction (usec) */
+	int64		sleep_until;	/* scheduled start time of next cmd (usec) */
 	instr_time	txn_begin;		/* used for measuring schedule lag times */
 	instr_time	stmt_begin;		/* used for measuring statement latencies */
 	int64		txn_latencies;	/* cumulated latencies */
@@ -963,6 +968,7 @@ top:
 		thread->throttle_trigger += wait;
 
 		st->txn_scheduled = thread->throttle_trigger;
+		st->sleep_until = st->txn_scheduled;
 		st->sleeping = 1;
 		st->throttling = true;
 		st->is_throttled = true;
@@ -978,7 +984,7 @@ top:
 
 		INSTR_TIME_SET_CURRENT(now);
 		now_us = INSTR_TIME_GET_MICROSEC(now);
-		if (st->txn_scheduled <= now_us)
+		if (st->sleep_until <= now_us)
 		{
 			st->sleeping = 0;	/* Done sleeping, go ahead with next command */
 			if (st->throttling)
@@ -1270,6 +1276,13 @@ top:
 		}
 		INSTR_TIME_SET_CURRENT(end);
 		INSTR_TIME_ACCUM_DIFF(*conn_time, end, start);
+
+		/* Reset session-local state */
+		st->listen = 0;
+		st->sleeping = 0;
+		st->throttling = false;
+		st->is_throttled = false;
+		memset(st->prepared, 0, sizeof(st->prepared));
 	}
 
 	/*
@@ -1510,13 +1523,37 @@ top:
 					snprintf(res, sizeof(res), INT64_FORMAT, ope1 * ope2);
 				else if (strcmp(argv[3], "/") == 0)
 				{
+					int64	operes;
+
 					if (ope2 == 0)
 					{
 						fprintf(stderr, "%s: division by zero\n", argv[0]);
 						st->ecnt++;
 						return true;
 					}
-					snprintf(res, sizeof(res), INT64_FORMAT, ope1 / ope2);
+					/*
+					 * INT64_MIN / -1 is problematic, since the result can't
+					 * be represented on a two's-complement machine. Some
+					 * machines produce INT64_MIN, some produce zero, some
+					 * throw an exception. We can dodge the problem by
+					 * recognizing that division by -1 is the same as
+					 * negation.
+					 */
+					if (ope2 == -1)
+					{
+						operes = -ope1;
+
+						/* overflow check (needed for INT64_MIN) */
+						if (ope1 == INT64_MIN)
+						{
+							fprintf(stderr, "bigint out of range\n");
+							st->ecnt++;
+							return true;
+						}
+					}
+					else
+						operes = ope1 / ope2;
+					snprintf(res, sizeof(res), INT64_FORMAT, operes);
 				}
 				else
 				{
@@ -1564,7 +1601,7 @@ top:
 				usec *= 1000000;
 
 			INSTR_TIME_SET_CURRENT(now);
-			st->txn_scheduled = INSTR_TIME_GET_MICROSEC(now) + usec;
+			st->sleep_until = INSTR_TIME_GET_MICROSEC(now) + usec;
 			st->sleeping = 1;
 
 			st->listen = 1;
@@ -2316,9 +2353,9 @@ printResults(int ttype, int64 normal_xacts, int nclients,
 	}
 	else
 	{
-		/* only an average latency computed from the duration is available */
+		/* no measurement, show average latency computed from run time */
 		printf("latency average: %.3f ms\n",
-			   1000.0 * duration * nclients / normal_xacts);
+			   1000.0 * time_include * nclients / normal_xacts);
 	}
 
 	if (throttle_delay)
@@ -3203,7 +3240,7 @@ threadRun(void *arg)
 			sock = PQsocket(st->con);
 			if (sock < 0)
 			{
-				fprintf(stderr, "bad socket: %s\n", strerror(errno));
+				fprintf(stderr, "bad socket: %s", PQerrorMessage(st->con));
 				goto done;
 			}
 
@@ -3271,11 +3308,21 @@ threadRun(void *arg)
 			Command   **commands = sql_files[st->use_file];
 			int			prev_ecnt = st->ecnt;
 
-			if (st->con && (FD_ISSET(PQsocket(st->con), &input_mask)
-							|| commands[st->state]->type == META_COMMAND))
+			if (st->con)
 			{
-				if (!doCustom(thread, st, &result->conn_time, logfile, &aggs))
-					remains--;	/* I've aborted */
+				int			sock = PQsocket(st->con);
+
+				if (sock < 0)
+				{
+					fprintf(stderr, "bad socket: %s", PQerrorMessage(st->con));
+					goto done;
+				}
+				if (FD_ISSET(sock, &input_mask) ||
+					commands[st->state]->type == META_COMMAND)
+				{
+					if (!doCustom(thread, st, &result->conn_time, logfile, &aggs))
+						remains--;	/* I've aborted */
+				}
 			}
 
 			if (st->ecnt > prev_ecnt && commands[st->state]->type == META_COMMAND)

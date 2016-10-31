@@ -2549,6 +2549,27 @@ FlushDatabaseBuffers(Oid dbid)
 }
 
 /*
+ * Flush a previously, shared or exclusively, locked and pinned buffer to the
+ * OS.
+ */
+void
+FlushOneBuffer(Buffer buffer)
+{
+	volatile BufferDesc *bufHdr;
+
+	/* currently not needed, but no fundamental reason not to support */
+	Assert(!BufferIsLocal(buffer));
+
+	Assert(BufferIsPinned(buffer));
+
+	bufHdr = &BufferDescriptors[buffer - 1];
+
+	Assert(LWLockHeldByMe(bufHdr->content_lock));
+
+	FlushBuffer(bufHdr, NULL);
+}
+
+/*
  * ReleaseBuffer -- release the pin on a buffer
  */
 void
@@ -2618,7 +2639,7 @@ IncrBufferRefCount(Buffer buffer)
  * This is essentially the same as MarkBufferDirty, except:
  *
  * 1. The caller does not write WAL; so if checksums are enabled, we may need
- *	  to write an XLOG_HINT WAL record to protect against torn pages.
+ *	  to write an XLOG_FPI WAL record to protect against torn pages.
  * 2. The caller might have only share-lock instead of exclusive-lock on the
  *	  buffer's content lock.
  * 3. This function does not guarantee that the buffer is always marked dirty

@@ -403,6 +403,39 @@ ALTER TABLE FKTABLE ADD FOREIGN KEY(ftest1, ftest2)
 -- As does this...
 ALTER TABLE FKTABLE ADD FOREIGN KEY(ftest2, ftest1)
      references pktable(ptest1, ptest2);
+DROP TABLE FKTABLE;
+DROP TABLE PKTABLE;
+
+-- Test that ALTER CONSTRAINT updates trigger deferrability properly
+
+CREATE TEMP TABLE PKTABLE (ptest1 int primary key);
+CREATE TEMP TABLE FKTABLE (ftest1 int);
+
+ALTER TABLE FKTABLE ADD CONSTRAINT fknd FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdd FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdi FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY IMMEDIATE;
+
+ALTER TABLE FKTABLE ADD CONSTRAINT fknd2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fknd2 NOT DEFERRABLE;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdd2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdd2 DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE FKTABLE ADD CONSTRAINT fkdi2 FOREIGN KEY(ftest1) REFERENCES pktable
+  ON DELETE CASCADE ON UPDATE NO ACTION NOT DEFERRABLE;
+ALTER TABLE FKTABLE ALTER CONSTRAINT fkdi2 DEFERRABLE INITIALLY IMMEDIATE;
+
+SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
+WHERE tgrelid = 'pktable'::regclass
+ORDER BY 1,2,3;
+SELECT conname, tgfoid::regproc, tgtype, tgdeferrable, tginitdeferred
+FROM pg_trigger JOIN pg_constraint con ON con.oid = tgconstraint
+WHERE tgrelid = 'fktable'::regclass
+ORDER BY 1,2,3;
 
 -- temp tables should go away by themselves, need not drop them.
 
@@ -1252,12 +1285,40 @@ select reltoastrelid <> 0 as has_toast_table
 from pg_class
 where oid = 'test_storage'::regclass;
 
--- ALTER TYPE with a check constraint and a child table (bug before Nov 2012)
-CREATE TABLE test_inh_check (a float check (a > 10.2));
+-- ALTER COLUMN TYPE with a check constraint and a child table (bug #13779)
+CREATE TABLE test_inh_check (a float check (a > 10.2), b float);
 CREATE TABLE test_inh_check_child() INHERITS(test_inh_check);
+\d test_inh_check
+\d test_inh_check_child
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
 ALTER TABLE test_inh_check ALTER COLUMN a TYPE numeric;
 \d test_inh_check
 \d test_inh_check_child
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+-- also try noinherit, local, and local+inherited cases
+ALTER TABLE test_inh_check ADD CONSTRAINT bnoinherit CHECK (b > 100) NO INHERIT;
+ALTER TABLE test_inh_check_child ADD CONSTRAINT blocal CHECK (b < 1000);
+ALTER TABLE test_inh_check_child ADD CONSTRAINT bmerged CHECK (b > 1);
+ALTER TABLE test_inh_check ADD CONSTRAINT bmerged CHECK (b > 1);
+\d test_inh_check
+\d test_inh_check_child
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
+ALTER TABLE test_inh_check ALTER COLUMN b TYPE numeric;
+\d test_inh_check
+\d test_inh_check_child
+select relname, conname, coninhcount, conislocal, connoinherit
+  from pg_constraint c, pg_class r
+  where relname like 'test_inh_check%' and c.conrelid = r.oid
+  order by 1, 2;
 
 -- check for rollback of ANALYZE corrupting table property flags (bug #11638)
 CREATE TABLE check_fk_presence_1 (id int PRIMARY KEY, t text);

@@ -11,6 +11,7 @@
 #include <sys/time.h>
 
 #include "libpq-fe.h"
+#include "pqexpbuffer.h"
 
 /* Use port in the private/dynamic port number range */
 #define DEF_PGUPORT			50432
@@ -70,7 +71,6 @@ extern char *output_files[];
 
 
 #ifndef WIN32
-#define pg_copy_file		copy_file
 #define pg_mv_file			rename
 #define pg_link_file		link
 #define PATH_SEPARATOR		'/'
@@ -80,7 +80,6 @@ extern char *output_files[];
 #define ECHO_QUOTE	"'"
 #define ECHO_BLANK	""
 #else
-#define pg_copy_file		CopyFile
 #define pg_mv_file			pgrename
 #define pg_link_file		win32_pghardlink
 #define PATH_SEPARATOR		'\\'
@@ -343,7 +342,6 @@ void		disable_old_cluster(void);
 /* dump.c */
 
 void		generate_old_dump(void);
-void		optionally_create_toast_tables(void);
 
 
 /* exec.c */
@@ -451,6 +449,9 @@ void		check_pghost_envvar(void);
 /* util.c */
 
 char	   *quote_identifier(const char *s);
+extern void appendShellString(PQExpBuffer buf, const char *str);
+extern void appendConnStrVal(PQExpBuffer buf, const char *str);
+extern void appendPsqlMetaConnect(PQExpBuffer buf, const char *dbname);
 int			get_user_info(char **user_name_p);
 void		check_ok(void);
 void
@@ -467,7 +468,7 @@ void
 prep_status(const char *fmt,...)
 __attribute__((format(PG_PRINTF_ATTRIBUTE, 1, 2)));
 void		check_ok(void);
-const char *getErrorText(int errNum);
+const char *getErrorText(void);
 unsigned int str2uint(const char *str);
 void		pg_putenv(const char *var, const char *val);
 
