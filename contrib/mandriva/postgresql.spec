@@ -53,6 +53,7 @@ BuildRequires: tk
 BuildRequires:  tcl tcl-devel
 BuildRequires:  libxml2-devel
 BuildRequires:  libxslt-devel
+BuildRequires:  docbook-style-xsl
 BuildRequires:	edit-devel
 BuildRequires:  zlib-devel
 %if %withuuid
@@ -338,7 +339,7 @@ the backend. PL/PgSQL is part of the core server package.
 perl -pi -e 's|^all:|LINK.shared=\$(COMPILER) -shared -Wl,-rpath,\$(rpathdir),-soname,\$(soname)\nall:|' src/pl/plperl/GNUmakefile
 
 
-%make world
+%make_build world
 
 pushd src/test
 make all
