@@ -584,10 +584,13 @@ exit 1
 %{_libdir}/postgresql/hstore_plperl.so
 %{_libdir}/postgresql/hstore_plpython2.so
 %{_libdir}/postgresql/ltree_plpython2.so
+%{_libdir}/postgresql/bloom.so
+%{_libdir}/postgresql/pg_visibility.so
 
 %{_bindir}/oid2name
 %{_bindir}/pgbench
 %{_bindir}/vacuumlo
+# %{_bindir}/bloom
 %{_bindir}/pg_test_timing
 %{_bindir}/pg_xlogdump
 %{_mandir}/man1/oid2name.1*
