@@ -313,16 +313,13 @@ the backend. PL/PgSQL is part of the core server package.
 
 %configure2_5x \
         --disable-rpath \
-        --enable-hba \
-        --enable-locale \
-        --enable-multibyte \
-        --enable-syslog\
         --with-CXX \
-        --enable-odbc \
         --with-perl \
         --with-python \
+        --with-gssapi \
         --with-tcl --with-tclconfig=%{_libdir} \
         --with-openssl \
+        --with-systemd \
         --with-pam \
         --with-libxml \
         --with-libxslt \
