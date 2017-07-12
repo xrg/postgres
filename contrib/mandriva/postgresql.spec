@@ -497,10 +497,8 @@ exit 1
 %doc COPYRIGHT README HISTORY doc/bug.template
 %{_bindir}/clusterdb
 %{_bindir}/createdb
-%{_bindir}/createlang
 %{_bindir}/createuser
 %{_bindir}/dropdb
-%{_bindir}/droplang
 %{_bindir}/dropuser
 %{_bindir}/pg_dump
 %{_bindir}/pg_dumpall
@@ -511,10 +509,8 @@ exit 1
 %{_bindir}/vacuumdb
 %{_mandir}/man1/clusterdb.*
 %{_mandir}/man1/createdb.*
-%{_mandir}/man1/createlang.*
 %{_mandir}/man1/createuser.*
 %{_mandir}/man1/dropdb.*
-%{_mandir}/man1/droplang.*
 %{_mandir}/man1/dropuser.*
 %{_mandir}/man1/pg_dump.*
 %{_mandir}/man1/pg_dumpall.*
@@ -709,10 +705,6 @@ exit 1
 %files pltcl
 %defattr(-,root,root) 
 %{_libdir}/postgresql/pltcl.so 
-%{_bindir}/pltcl_delmod 
-%{_bindir}/pltcl_listmod 
-%{_bindir}/pltcl_loadmod 
-%{_datadir}/postgresql/unknown.pltcl 
 
 %files plpgsql
 %defattr(-,root,root) 
