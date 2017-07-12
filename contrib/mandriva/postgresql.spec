@@ -543,6 +543,7 @@ exit 1
 %files contrib
 # %doc contrib/*/README.* contrib/spi/*.example
 %{_libdir}/postgresql/_int.so
+%{_libdir}/postgresql/amcheck.so
 %{_libdir}/postgresql/btree_gist.so
 %{_libdir}/postgresql/chkpass.so
 %{_libdir}/postgresql/cube.so
@@ -646,7 +647,7 @@ exit 1
 %{_libdir}/postgresql/pgxml.so
 %{_libdir}/postgresql/dict_int.so
 %{_libdir}/postgresql/dict_xsyn.so
-%{_libdir}/postgresql/tsearch2.so
+# %{_libdir}/postgresql/tsearch2.so
 %{_libdir}/postgresql/dict_snowball.so
 %{_libdir}/postgresql/auto_explain.so
 %{_libdir}/postgresql/btree_gin.so
@@ -654,6 +655,7 @@ exit 1
 %{_libdir}/postgresql/pg_stat_statements.so
 %{_libdir}/postgresql/auth_delay.so
 %{_libdir}/postgresql/file_fdw.so
+%{_libdir}/postgresql/pgoutput.so
 %if %{withuuid}
 %{_libdir}/postgresql/uuid-ossp.so
 %endif
