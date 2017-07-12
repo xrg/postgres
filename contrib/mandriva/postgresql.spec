@@ -585,11 +585,9 @@ exit 1
 %{_bindir}/pgbench
 %{_bindir}/vacuumlo
 # %{_bindir}/bloom
-%{_bindir}/pg_test_timing
 %{_bindir}/pg_waldump
 %{_mandir}/man1/oid2name.1*
 %{_mandir}/man1/pgbench.1*
-%{_mandir}/man1/pg_test_timing.1*
 %{_mandir}/man1/pg_waldump.1*
 %{_mandir}/man1/vacuumlo.1*
 
@@ -606,7 +604,7 @@ exit 1
 %config(noreplace) %{_initrddir}/postgresql
 %endif
 %{_bindir}/initdb
-%{_bindir}/pg_controldata 
+%{_bindir}/pg_controldata
 %{_bindir}/pg_ctl
 %{_bindir}/pg_resetwal
 %{_bindir}/postgres
@@ -618,6 +616,8 @@ exit 1
 %{_bindir}/pg_recvlogical
 %{_bindir}/pg_receivewal
 %{_bindir}/pg_test_fsync
+%{_bindir}/pg_test_timing
+
 %{_bindir}/pg_rewind
 %{_mandir}/man1/initdb.1*
 %{_mandir}/man1/pg_archivecleanup.1*
@@ -631,6 +631,7 @@ exit 1
 %{_mandir}/man1/postmaster.1*
 %{_mandir}/man1/pg_basebackup.1*
 %{_mandir}/man1/pg_test_fsync.1*
+%{_mandir}/man1/pg_test_timing.1*
 %{_mandir}/man1/pg_upgrade.1*
 %{_mandir}/man1/pg_rewind.1*
 %dir %{_libdir}/postgresql
