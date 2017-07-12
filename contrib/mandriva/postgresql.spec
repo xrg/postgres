@@ -22,6 +22,7 @@
 
 %define bname postgresql
 %define current_major_version %(echo %{git_get_ver} | sed 's/^\\([0-9]\\+\\.[0-9]\\+\\)\\..*$/\\1/' )
+%define lang_ver_suffix '-10'
 
 %define libname %mklibname pq%{current_major_version} _%{major}
 %define libecpg %mklibname ecpg%{current_major_version} _%{major_ecpg}
@@ -401,17 +402,13 @@ echo -n '' > main.lst
 for i in \
     pg_ctl initdb pg_config psql pg_dump pgscripts libpq libecpg \
     ecpg libpq%{major} ecpglib%{major_ecpg}; do
-    %find_lang $i-%{current_major_version}
-    cat $i-%{current_major_version}.lang >> main.lst
-    %find_lang $i
-    cat $i.lang >> main.lst
+    %find_lang $i%{lang_ver_suffix}
+    cat $i%{lang_ver_suffix}.lang >> main.lst
 done
 echo -n '' > server.lst
 for i in postgres pg_resetxlog pg_controldata plpgsql plpython plperl pltcl pg_basebackup; do
-    %find_lang $i
-    cat $i.lang >> server.lst
-    %find_lang $i-%{current_major_version}
-    cat $i-%{current_major_version}.lang >> server.lst
+    %find_lang $i%{lang_ver_suffix}
+    cat $i%{lang_ver_suffix}.lang >> server.lst
 done
 
 # pg_ctl.lang initdb.lang pg_config.lang psql.lang pg_dump.lang pgscripts.lang \
