@@ -412,7 +412,7 @@ for i in postgres pg_resetxlog pg_controldata plpgsql plpython plperl pltcl pg_b
 done
 
 # pg_ctl.lang initdb.lang pg_config.lang psql.lang pg_dump.lang pgscripts.lang \
-# postgres.lang pg_resetxlog.lang pg_controldata.lang \
+# postgres.lang pg_resetwal.lang pg_controldata.lang \
 # libpq.lang libecpg.lang \
 
 # taken directly in build dir.
@@ -586,11 +586,11 @@ exit 1
 %{_bindir}/vacuumlo
 # %{_bindir}/bloom
 %{_bindir}/pg_test_timing
-%{_bindir}/pg_xlogdump
+%{_bindir}/pg_waldump
 %{_mandir}/man1/oid2name.1*
 %{_mandir}/man1/pgbench.1*
 %{_mandir}/man1/pg_test_timing.1*
-%{_mandir}/man1/pg_xlogdump.1*
+%{_mandir}/man1/pg_waldump.1*
 %{_mandir}/man1/vacuumlo.1*
 
 %files server -f server.lst
@@ -608,7 +608,7 @@ exit 1
 %{_bindir}/initdb
 %{_bindir}/pg_controldata 
 %{_bindir}/pg_ctl
-%{_bindir}/pg_resetxlog
+%{_bindir}/pg_resetwal
 %{_bindir}/postgres
 %{_bindir}/postmaster
 %{_bindir}/pg_standby
@@ -616,7 +616,7 @@ exit 1
 %{_bindir}/pg_upgrade
 %{_bindir}/pg_basebackup
 %{_bindir}/pg_recvlogical
-%{_bindir}/pg_receivexlog
+%{_bindir}/pg_receivewal
 %{_bindir}/pg_test_fsync
 %{_bindir}/pg_rewind
 %{_mandir}/man1/initdb.1*
@@ -624,9 +624,9 @@ exit 1
 %{_mandir}/man1/pg_controldata.*
 %{_mandir}/man1/pg_ctl.1*
 %{_mandir}/man1/pg_recvlogical.1*
-%{_mandir}/man1/pg_receivexlog.1*
+%{_mandir}/man1/pg_receivewal.1*
 %{_mandir}/man1/pg_standby.1*
-%{_mandir}/man1/pg_resetxlog.*
+%{_mandir}/man1/pg_resetwal.*
 %{_mandir}/man1/postgres.1*
 %{_mandir}/man1/postmaster.1*
 %{_mandir}/man1/pg_basebackup.1*
