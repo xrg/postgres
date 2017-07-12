@@ -406,7 +406,11 @@ for i in \
     cat $i%{lang_ver_suffix}.lang >> main.lst
 done
 echo -n '' > server.lst
-for i in postgres pg_resetxlog pg_controldata plpgsql plpython plperl pltcl pg_basebackup; do
+for i in postgres pg_archivecleanup pg_controldata pg_basebackup \
+        pg_resetwal pg_waldump pg_upgrade \
+        plpgsql plpython plperl pltcl \
+        pg_test_fsync pg_test_timing
+do
     %find_lang $i%{lang_ver_suffix}
     cat $i%{lang_ver_suffix}.lang >> server.lst
 done
