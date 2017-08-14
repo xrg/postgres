@@ -1611,6 +1611,15 @@ _outCurrentOfExpr(StringInfo str, const CurrentOfExpr *node)
 }
 
 static void
+_outNextValueExpr(StringInfo str, const NextValueExpr *node)
+{
+	WRITE_NODE_TYPE("NEXTVALUEEXPR");
+
+	WRITE_OID_FIELD(seqid);
+	WRITE_OID_FIELD(typeId);
+}
+
+static void
 _outInferenceElem(StringInfo str, const InferenceElem *node)
 {
 	WRITE_NODE_TYPE("INFERENCEELEM");
@@ -3573,7 +3582,7 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 {
 	WRITE_NODE_TYPE("PARTITIONRANGEDATUM");
 
-	WRITE_BOOL_FIELD(infinite);
+	WRITE_ENUM_FIELD(kind, PartitionRangeDatumKind);
 	WRITE_NODE_FIELD(value);
 	WRITE_LOCATION_FIELD(location);
 }
@@ -3871,6 +3880,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_CurrentOfExpr:
 				_outCurrentOfExpr(str, obj);
+				break;
+			case T_NextValueExpr:
+				_outNextValueExpr(str, obj);
 				break;
 			case T_InferenceElem:
 				_outInferenceElem(str, obj);
