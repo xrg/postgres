@@ -150,8 +150,17 @@ insert into dcomptable (d1[1].r) values(99);
 insert into dcomptable (d1[1].r, d1[1].i) values(99, 100);
 insert into dcomptable (d1[1].r, d1[1].i) values(100, 99);  -- fail
 update dcomptable set d1[1].r = d1[1].r + 1 where d1[1].i > 0;  -- fail
-update dcomptable set d1[1].r = d1[1].r - 1 where d1[1].i > 0;
+update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
+  where d1[1].i > 0;
 select * from dcomptable;
+
+explain (verbose, costs off)
+  update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
+    where d1[1].i > 0;
+create rule silly as on delete to dcomptable do instead
+  update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
+    where d1[1].i > 0;
+\d+ dcomptable
 
 drop table dcomptable;
 drop type comptype cascade;
@@ -442,10 +451,27 @@ insert into ddtest2 values(row(-1));
 alter domain posint add constraint c1 check(value >= 0);
 drop table ddtest2;
 
+-- Likewise for domains within arrays of composite
 create table ddtest2(f1 ddtest1[]);
 insert into ddtest2 values('{(-1)}');
 alter domain posint add constraint c1 check(value >= 0);
 drop table ddtest2;
+
+-- Likewise for domains within domains over array of composite
+create domain ddtest1d as ddtest1[];
+create table ddtest2(f1 ddtest1d);
+insert into ddtest2 values('{(-1)}');
+alter domain posint add constraint c1 check(value >= 0);
+drop table ddtest2;
+drop domain ddtest1d;
+
+-- Doesn't work for ranges, either
+create type rposint as range (subtype = posint);
+create table ddtest2(f1 rposint);
+insert into ddtest2 values('(-1,3]');
+alter domain posint add constraint c1 check(value >= 0);
+drop table ddtest2;
+drop type rposint;
 
 alter domain posint add constraint c1 check(value >= 0);
 
