@@ -837,6 +837,14 @@ FROM generate_series(-3.5, 3.5, 1) as x;
      <secondary>and serial type</secondary>
     </indexterm>
 
+    <note>
+     <para>
+      This section describes a PostgreSQL-specific way to create an
+      autoincrementing column.  Another way is to use the SQL-standard
+      identity column feature, described at <xref linkend="sql-createtable">.
+     </para>
+    </note>
+
     <para>
      The data types <type>smallserial</type>, <type>serial</type> and
      <type>bigserial</type> are not true types, but merely
@@ -3623,7 +3631,9 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
     <para>
     The essential difference between <type>inet</type> and <type>cidr</type>
     data types is that <type>inet</type> accepts values with nonzero bits to
-    the right of the netmask, whereas <type>cidr</type> does not.
+    the right of the netmask, whereas <type>cidr</type> does not.  For
+    example, <literal>192.168.0.1/24</literal> is valid for <type>inet</type>
+    but not for <type>cidr</type>.
     </para>
 
       <tip>
@@ -4301,7 +4311,7 @@ SET xmloption TO { DOCUMENT | CONTENT };
     <para>
      Some XML-related functions may not work at all on non-ASCII data
      when the server encoding is not UTF-8.  This is known to be an
-     issue for <function>xpath()</> in particular.
+     issue for <function>xmltable()</> and <function>xpath()</> in particular.
     </para>
    </caution>
    </sect2>

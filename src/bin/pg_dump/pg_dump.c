@@ -676,8 +676,8 @@ main(int argc, char **argv)
 		dopt.no_security_labels = 1;
 
 	/*
-	 * On hot standby slaves, never try to dump unlogged table data, since it
-	 * will just throw an error.
+	 * On hot standbys, never try to dump unlogged table data, since it will
+	 * just throw an error.
 	 */
 	if (fout->isStandby)
 		dopt.no_unlogged_table_data = true;
@@ -1131,9 +1131,9 @@ setup_connection(Archive *AH, const char *dumpencoding,
 			 AH->remoteVersion >= 90200 &&
 			 !dopt->no_synchronized_snapshots)
 	{
-		if (AH->isStandby)
+		if (AH->isStandby && AH->remoteVersion < 100000)
 			exit_horribly(NULL,
-						  "Synchronized snapshots are not supported on standby servers.\n"
+						  "Synchronized snapshots on standby servers are not supported by this server version.\n"
 						  "Run with --no-synchronized-snapshots instead if you do not need\n"
 						  "synchronized snapshots.\n");
 
@@ -4141,8 +4141,8 @@ getNamespaces(Archive *fout, int *numNamespaces)
 		 */
 		if (dopt->outputClean)
 			appendPQExpBuffer(query, " AND pip.objoid <> "
-									 "coalesce((select oid from pg_namespace "
-									 "where nspname = 'public'),0)");
+							  "coalesce((select oid from pg_namespace "
+							  "where nspname = 'public'),0)");
 
 		appendPQExpBuffer(query, ") ");
 

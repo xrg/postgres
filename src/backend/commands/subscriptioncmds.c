@@ -919,9 +919,10 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 	subworkers = logicalrep_workers_find(subid, false);
 	LWLockRelease(LogicalRepWorkerLock);
-	foreach (lc, subworkers)
+	foreach(lc, subworkers)
 	{
 		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
+
 		if (slotname)
 			logicalrep_worker_stop(w->subid, w->relid);
 		else
@@ -939,7 +940,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	snprintf(originname, sizeof(originname), "pg_%u", subid);
 	originid = replorigin_by_name(originname, true);
 	if (originid != InvalidRepOriginId)
-		replorigin_drop(originid);
+		replorigin_drop(originid, false);
 
 	/*
 	 * If there is no slot associated with the subscription, we can finish

@@ -351,8 +351,8 @@ retry:
 		if (s->in_use && strcmp(name, NameStr(s->data.name)) == 0)
 		{
 			/*
-			 * This is the slot we want.  We don't know yet if it's active,
-			 * so get ready to sleep on it in case it is.  (We may end up not
+			 * This is the slot we want.  We don't know yet if it's active, so
+			 * get ready to sleep on it in case it is.  (We may end up not
 			 * sleeping, but we don't want to do this while holding the
 			 * spinlock.)
 			 */
@@ -391,12 +391,13 @@ retry:
 							name, active_pid)));
 
 		/* Wait here until we get signaled, and then restart */
-		ConditionVariableSleep(&slot->active_cv, PG_WAIT_LOCK);
+		ConditionVariableSleep(&slot->active_cv,
+							   WAIT_EVENT_REPLICATION_SLOT_DROP);
 		ConditionVariableCancelSleep();
 		goto retry;
 	}
 	else
-		ConditionVariableCancelSleep();		/* no sleep needed after all */
+		ConditionVariableCancelSleep(); /* no sleep needed after all */
 
 	/* Let everybody know we've modified this slot */
 	ConditionVariableBroadcast(&slot->active_cv);

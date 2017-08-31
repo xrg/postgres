@@ -179,6 +179,61 @@ select  count(*) from tenk1 where thousand > 95;
   9040
 (1 row)
 
+-- test rescan cases too
+set enable_material = false;
+explain (costs off)
+select * from
+  (select count(unique1) from tenk1 where hundred > 10) ss
+  right join (values (1),(2),(3)) v(x) on true;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Nested Loop Left Join
+   ->  Values Scan on "*VALUES*"
+   ->  Finalize Aggregate
+         ->  Gather
+               Workers Planned: 4
+               ->  Partial Aggregate
+                     ->  Parallel Index Scan using tenk1_hundred on tenk1
+                           Index Cond: (hundred > 10)
+(8 rows)
+
+select * from
+  (select count(unique1) from tenk1 where hundred > 10) ss
+  right join (values (1),(2),(3)) v(x) on true;
+ count | x 
+-------+---
+  8900 | 1
+  8900 | 2
+  8900 | 3
+(3 rows)
+
+explain (costs off)
+select * from
+  (select count(*) from tenk1 where thousand > 99) ss
+  right join (values (1),(2),(3)) v(x) on true;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   ->  Values Scan on "*VALUES*"
+   ->  Finalize Aggregate
+         ->  Gather
+               Workers Planned: 4
+               ->  Partial Aggregate
+                     ->  Parallel Index Only Scan using tenk1_thous_tenthous on tenk1
+                           Index Cond: (thousand > 99)
+(8 rows)
+
+select * from
+  (select count(*) from tenk1 where thousand > 99) ss
+  right join (values (1),(2),(3)) v(x) on true;
+ count | x 
+-------+---
+  9000 | 1
+  9000 | 2
+  9000 | 3
+(3 rows)
+
+reset enable_material;
 reset enable_seqscan;
 reset enable_bitmapscan;
 -- test parallel bitmap heap scan.
@@ -258,32 +313,116 @@ select  count(*) from tenk1, tenk2 where tenk1.unique1 = tenk2.unique1;
 
 reset enable_hashjoin;
 reset enable_nestloop;
---test gather merge
-set enable_hashagg to off;
+-- test gather merge
+set enable_hashagg = false;
 explain (costs off)
-   select  string4, count((unique2)) from tenk1 group by string4 order by string4;
+   select count(*) from tenk1 group by twenty;
                      QUERY PLAN                     
 ----------------------------------------------------
  Finalize GroupAggregate
-   Group Key: string4
+   Group Key: twenty
    ->  Gather Merge
          Workers Planned: 4
          ->  Partial GroupAggregate
-               Group Key: string4
+               Group Key: twenty
                ->  Sort
-                     Sort Key: string4
+                     Sort Key: twenty
                      ->  Parallel Seq Scan on tenk1
 (9 rows)
 
-select  string4, count((unique2)) from tenk1 group by string4 order by string4;
- string4 | count 
----------+-------
- AAAAxx  |  2500
- HHHHxx  |  2500
- OOOOxx  |  2500
- VVVVxx  |  2500
-(4 rows)
+select count(*) from tenk1 group by twenty;
+ count 
+-------
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+   500
+(20 rows)
 
+--test rescan behavior of gather merge
+set enable_material = false;
+explain (costs off)
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4 order by string4) ss
+  right join (values (1),(2),(3)) v(x) on true;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Nested Loop Left Join
+   ->  Values Scan on "*VALUES*"
+   ->  Finalize GroupAggregate
+         Group Key: tenk1.string4
+         ->  Gather Merge
+               Workers Planned: 4
+               ->  Partial GroupAggregate
+                     Group Key: tenk1.string4
+                     ->  Sort
+                           Sort Key: tenk1.string4
+                           ->  Parallel Seq Scan on tenk1
+(11 rows)
+
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4 order by string4) ss
+  right join (values (1),(2),(3)) v(x) on true;
+ string4 | count | x 
+---------+-------+---
+ AAAAxx  |  2500 | 1
+ HHHHxx  |  2500 | 1
+ OOOOxx  |  2500 | 1
+ VVVVxx  |  2500 | 1
+ AAAAxx  |  2500 | 2
+ HHHHxx  |  2500 | 2
+ OOOOxx  |  2500 | 2
+ VVVVxx  |  2500 | 2
+ AAAAxx  |  2500 | 3
+ HHHHxx  |  2500 | 3
+ OOOOxx  |  2500 | 3
+ VVVVxx  |  2500 | 3
+(12 rows)
+
+reset enable_material;
+-- gather merge test with 0 worker
+set max_parallel_workers = 0;
+explain (costs off)
+   select string4 from tenk1 order by string4 limit 5;
+                  QUERY PLAN                  
+----------------------------------------------
+ Limit
+   ->  Gather Merge
+         Workers Planned: 4
+         ->  Sort
+               Sort Key: string4
+               ->  Parallel Seq Scan on tenk1
+(6 rows)
+
+select string4 from tenk1 order by string4 limit 5;
+ string4 
+---------
+ AAAAxx
+ AAAAxx
+ AAAAxx
+ AAAAxx
+ AAAAxx
+(5 rows)
+
+reset max_parallel_workers;
 reset enable_hashagg;
 set force_parallel_mode=1;
 explain (costs off)
