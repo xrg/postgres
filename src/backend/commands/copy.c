@@ -1822,7 +1822,16 @@ BeginCopyTo(ParseState *pstate,
 						 errmsg("relative path not allowed for COPY to file")));
 
 			oumask = umask(S_IWGRP | S_IWOTH);
-			cstate->copy_file = AllocateFile(cstate->filename, PG_BINARY_W);
+			PG_TRY();
+			{
+				cstate->copy_file = AllocateFile(cstate->filename, PG_BINARY_W);
+			}
+			PG_CATCH();
+			{
+				umask(oumask);
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
 			umask(oumask);
 			if (cstate->copy_file == NULL)
 			{
@@ -2383,13 +2392,25 @@ CopyFrom(CopyState cstate)
 	/*
 	 * Optimize if new relfilenode was created in this subxact or one of its
 	 * committed children and we won't see those rows later as part of an
-	 * earlier scan or command. This ensures that if this subtransaction
-	 * aborts then the frozen rows won't be visible after xact cleanup. Note
+	 * earlier scan or command. The subxact test ensures that if this subxact
+	 * aborts then the frozen rows won't be visible after xact cleanup.  Note
 	 * that the stronger test of exactly which subtransaction created it is
-	 * crucial for correctness of this optimization.
+	 * crucial for correctness of this optimization. The test for an earlier
+	 * scan or command tolerates false negatives. FREEZE causes other sessions
+	 * to see rows they would not see under MVCC, and a false negative merely
+	 * spreads that anomaly to the current session.
 	 */
 	if (cstate->freeze)
 	{
+		/*
+		 * Tolerate one registration for the benefit of FirstXactSnapshot.
+		 * Scan-bearing queries generally create at least two registrations,
+		 * though relying on that is fragile, as is ignoring ActiveSnapshot.
+		 * Clear CatalogSnapshot to avoid counting its registration.  We'll
+		 * still detect ongoing catalog scans, each of which separately
+		 * registers the snapshot it uses.
+		 */
+		InvalidateCatalogSnapshot();
 		if (!ThereAreNoPriorRegisteredSnapshots() || !ThereAreNoReadyPortals())
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
@@ -2429,12 +2450,17 @@ CopyFrom(CopyState cstate)
 	/* Triggers might need a slot as well */
 	estate->es_trig_tuple_slot = ExecInitExtraTupleSlot(estate);
 
+	/* Prepare to catch AFTER triggers. */
+	AfterTriggerBeginQuery();
+
 	/*
 	 * If there are any triggers with transition tables on the named relation,
 	 * we need to be prepared to capture transition tuples.
 	 */
 	cstate->transition_capture =
-		MakeTransitionCaptureState(cstate->rel->trigdesc);
+		MakeTransitionCaptureState(cstate->rel->trigdesc,
+								   RelationGetRelid(cstate->rel),
+								   CMD_INSERT);
 
 	/*
 	 * If the named relation is a partitioned table, initialize state for
@@ -2509,9 +2535,6 @@ CopyFrom(CopyState cstate)
 		useHeapMultiInsert = true;
 		bufferedTuples = palloc(MAX_BUFFERED_TUPLES * sizeof(HeapTuple));
 	}
-
-	/* Prepare to catch AFTER triggers. */
-	AfterTriggerBeginQuery();
 
 	/*
 	 * Check BEFORE STATEMENT insertion triggers. It's debatable whether we

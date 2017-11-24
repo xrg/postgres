@@ -391,10 +391,13 @@ slot_modify_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 		Form_pg_attribute att = slot->tts_tupleDescriptor->attrs[i];
 		int			remoteattnum = rel->attrmap[i];
 
-		if (remoteattnum >= 0 && !replaces[remoteattnum])
+		if (remoteattnum < 0)
 			continue;
 
-		if (remoteattnum >= 0 && values[remoteattnum] != NULL)
+		if (!replaces[remoteattnum])
+			continue;
+
+		if (values[remoteattnum] != NULL)
 		{
 			Oid			typinput;
 			Oid			typioparam;
@@ -629,7 +632,7 @@ check_relation_updatable(LogicalRepRelMapEntry *rel)
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("publisher does not send replica identity column "
+				 errmsg("publisher did not send replica identity column "
 						"expected by the logical replication target relation \"%s.%s\"",
 						rel->remoterel.nspname, rel->remoterel.relname)));
 	}
@@ -844,7 +847,7 @@ apply_handle_delete(StringInfo s)
 		/* The tuple to be deleted could not be found. */
 		ereport(DEBUG1,
 				(errmsg("logical replication could not find row for delete "
-						"in replication target %s",
+						"in replication target relation \"%s\"",
 						RelationGetRelationName(rel->localrel))));
 	}
 
@@ -910,7 +913,7 @@ apply_dispatch(StringInfo s)
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("invalid logical replication message type %c", action)));
+					 errmsg("invalid logical replication message type \"%c\"", action)));
 	}
 }
 

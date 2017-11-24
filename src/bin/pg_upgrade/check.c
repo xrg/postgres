@@ -234,9 +234,9 @@ check_cluster_versions(void)
 {
 	prep_status("Checking cluster versions");
 
-	/* get old and new cluster versions */
-	old_cluster.major_version = get_major_server_version(&old_cluster);
-	new_cluster.major_version = get_major_server_version(&new_cluster);
+	/* cluster versions should already have been obtained */
+	Assert(old_cluster.major_version != 0);
+	Assert(new_cluster.major_version != 0);
 
 	/*
 	 * We allow upgrades from/to the same major version for alpha/beta
@@ -987,7 +987,7 @@ check_for_jsonb_9_4_usage(ClusterInfo *cluster)
 	bool		found = false;
 	char		output_path[MAXPGPATH];
 
-	prep_status("Checking for incompatible jsonb data type");
+	prep_status("Checking for incompatible \"jsonb\" data type");
 
 	snprintf(output_path, sizeof(output_path), "tables_using_jsonb.txt");
 

@@ -1198,7 +1198,7 @@ include_dir 'conf.d'
        <para>
         Note that older clients might lack support for the SCRAM authentication
         mechanism, and hence not work with passwords encrypted with
-        SCRAM-SHA-256.
+        SCRAM-SHA-256.  See <xref linkend="auth-password"> for more details.
        </para>
       </listitem>
      </varlistentry>
@@ -3457,7 +3457,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
      </para>
 
      <para>
-      Note that <varname>wal_receiver_timeout</varname> and
+      Note that <varname>wal_receiver_timeout</varname>,
+      <varname>wal_receiver_status_interval</varname> and
       <varname>wal_retrieve_retry_interval</varname> configuration parameters
       affect the logical replication workers as well.
      </para>

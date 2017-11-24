@@ -13504,7 +13504,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 	 * Prevent circularity by seeing if rel is a partition of attachrel. (In
 	 * particular, this disallows making a rel a partition of itself.)
 	 *
-	 * We do that by checking if rel is a member of the list of attachRel's
+	 * We do that by checking if rel is a member of the list of attachrel's
 	 * partitions provided the latter is partitioned at all.  We want to avoid
 	 * having to construct this list again, so we request the strongest lock
 	 * on all partitions.  We need the strongest lock, because we may decide
@@ -13584,7 +13584,7 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 					 errmsg("table \"%s\" contains column \"%s\" not found in parent \"%s\"",
 							RelationGetRelationName(attachrel), attributeName,
 							RelationGetRelationName(rel)),
-					 errdetail("New partition should contain only the columns present in parent.")));
+					 errdetail("The new partition may contain only the columns present in parent.")));
 	}
 
 	/*

@@ -252,16 +252,16 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	estate->es_instrument = queryDesc->instrument_options;
 
 	/*
-	 * Initialize the plan state tree
-	 */
-	InitPlan(queryDesc, eflags);
-
-	/*
 	 * Set up an AFTER-trigger statement context, unless told not to, or
 	 * unless it's EXPLAIN-only mode (when ExecutorFinish won't be called).
 	 */
 	if (!(eflags & (EXEC_FLAG_SKIP_TRIGGERS | EXEC_FLAG_EXPLAIN_ONLY)))
 		AfterTriggerBeginQuery();
+
+	/*
+	 * Initialize the plan state tree
+	 */
+	InitPlan(queryDesc, eflags);
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -1097,8 +1097,9 @@ InitPlan(QueryDesc *queryDesc, int eflags)
  * CheckValidRowMarkRel.
  */
 void
-CheckValidResultRel(Relation resultRel, CmdType operation)
+CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 {
+	Relation	resultRel = resultRelInfo->ri_RelationDesc;
 	TriggerDesc *trigDesc = resultRel->trigdesc;
 	FdwRoutine *fdwroutine;
 
@@ -1169,10 +1170,17 @@ CheckValidResultRel(Relation resultRel, CmdType operation)
 			break;
 		case RELKIND_FOREIGN_TABLE:
 			/* Okay only if the FDW supports it */
-			fdwroutine = GetFdwRoutineForRelation(resultRel, false);
+			fdwroutine = resultRelInfo->ri_FdwRoutine;
 			switch (operation)
 			{
 				case CMD_INSERT:
+
+					/*
+					 * If foreign partition to do tuple-routing for, skip the
+					 * check; it's disallowed elsewhere.
+					 */
+					if (resultRelInfo->ri_PartitionRoot)
+						break;
 					if (fdwroutine->ExecForeignInsert == NULL)
 						ereport(ERROR,
 								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1696,6 +1704,7 @@ ExecutePlan(EState *estate,
 	if (!execute_once || dest->mydest == DestIntoRel)
 		use_parallel_mode = false;
 
+	estate->es_use_parallel_mode = use_parallel_mode;
 	if (use_parallel_mode)
 		EnterParallelMode();
 
@@ -3306,11 +3315,6 @@ ExecSetupPartitionTupleRouting(Relation rel,
 		part_tupdesc = RelationGetDescr(partrel);
 
 		/*
-		 * Verify result relation is a valid target for the current operation.
-		 */
-		CheckValidResultRel(partrel, CMD_INSERT);
-
-		/*
 		 * Save a tuple conversion map to convert a tuple routed to this
 		 * partition from the parent's type to the partition's.
 		 */
@@ -3323,8 +3327,10 @@ ExecSetupPartitionTupleRouting(Relation rel,
 						  rel,
 						  estate->es_instrument);
 
-		estate->es_leaf_result_relations =
-			lappend(estate->es_leaf_result_relations, leaf_part_rri);
+		/*
+		 * Verify result relation is a valid target for INSERT.
+		 */
+		CheckValidResultRel(leaf_part_rri, CMD_INSERT);
 
 		/*
 		 * Open partition indices (remember we do not support ON CONFLICT in
@@ -3334,6 +3340,9 @@ ExecSetupPartitionTupleRouting(Relation rel,
 		if (leaf_part_rri->ri_RelationDesc->rd_rel->relhasindex &&
 			leaf_part_rri->ri_IndexRelationDescs == NULL)
 			ExecOpenIndices(leaf_part_rri, false);
+
+		estate->es_leaf_result_relations =
+			lappend(estate->es_leaf_result_relations, leaf_part_rri);
 
 		leaf_part_rri++;
 		i++;
